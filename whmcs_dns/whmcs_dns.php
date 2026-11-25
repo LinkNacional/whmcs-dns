@@ -372,6 +372,28 @@ function whmcs_dns_deletion_config(array $vars, string $domainName, array $zoneC
     return $config;
 }
 
+/**
+ * Config persistido em zones.config.
+ *
+ * Nunca persiste credenciais (apikey, cloudns_auth_password, sharing_id).
+ * Mantem o provider e apenas as chaves estruturais que a delecao de zona
+ * Scaleway usa (project_id/parent_domain) — ver whmcs_dns_deletion_config().
+ */
+function whmcs_dns_zone_persistence_config(array $config): array
+{
+    $stored = ['provider' => (string)($config['provider'] ?? '')];
+
+    if ($stored['provider'] === 'Scaleway') {
+        foreach (['project_id', 'parent_domain'] as $key) {
+            if (array_key_exists($key, $config)) {
+                $stored[$key] = $config[$key];
+            }
+        }
+    }
+
+    return $stored;
+}
+
 function whmcs_dns_provider_config(array $vars, string $domainName): array
 {
     $config = [
@@ -551,10 +573,8 @@ function whmcs_dns_clientarea($vars)
                                 'client_id' => $clientId,
                                 'config'    => json_encode($cfg, JSON_UNESCAPED_SLASHES),
                             ];
-                            $storedConfig = json_encode(
-                                ['provider' => (string)($cfg['provider'] ?? '')],
-                                JSON_UNESCAPED_SLASHES
-                            );
+                            // Persistencia local sem credenciais; a chamada ao Cardo usa o config completo.
+                            $storedConfig = json_encode(whmcs_dns_zone_persistence_config($cfg), JSON_UNESCAPED_SLASHES);
 
                             // A2: reserva a linha na mesma transacao do count. A leitura
                             // FOR UPDATE serializa por cliente (inclusive gap lock com 0 zonas).
@@ -944,6 +964,7 @@ function whmcs_dns_clientarea($vars)
     $records = [];
     $nameservers = [];
     $dnssec = null;
+    $persistedZoneConfig = [];
 
     if ($selectedDomain !== '') {
         $zone = Capsule::table(WHMCSDNS_TABLE_ZONES)
@@ -957,12 +978,22 @@ function whmcs_dns_clientarea($vars)
                 $persistedZoneConfig = [];
             }
 
+            // Migracao pontual e idempotente: linhas gravadas pelo fallback antigo
+            // podiam carregar a apikey em zones.config. Reescreve sem credenciais.
+            $persistedSafe = whmcs_dns_zone_persistence_config($persistedZoneConfig);
+            if ($persistedSafe !== $persistedZoneConfig) {
+                Capsule::table(WHMCSDNS_TABLE_ZONES)
+                    ->where('id', $zone->id)
+                    ->update(['config' => json_encode($persistedSafe, JSON_UNESCAPED_SLASHES)]);
+                logActivity("WHMCS-DNS: zones.config sanitizado (zona={$zone->id}, cliente={$clientId})");
+                $persistedZoneConfig = $persistedSafe;
+            }
+
             $zoneData = [
                 'id'          => (int)$zone->id,
                 'domain_name' => (string)$zone->domain_name,
                 'created_at'  => (string)$zone->created_at,
                 'updated_at'  => (string)$zone->updated_at,
-                'config'      => $persistedZoneConfig,
             ];
 
             $records = Capsule::table(WHMCSDNS_TABLE_RECORDS)
@@ -1077,7 +1108,7 @@ function whmcs_dns_clientarea($vars)
             'zoneCount'      => $zoneCount,
             'provider'       => $provider,
             'canDisableZone' => $zoneData !== null
-                ? whmcs_dns_can_delete_zone($selectedDomain, $zoneData['config'] ?? [])
+                ? whmcs_dns_can_delete_zone($selectedDomain, $persistedZoneConfig)
                 : false,
         ],
     ];
