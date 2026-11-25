@@ -17,6 +17,7 @@ use Namingo\Cardo\DNS\Service as CardoService;
 
 define('WHMCSDNS_TABLE_ZONES', 'zones');
 define('WHMCSDNS_TABLE_RECORDS', 'records');
+define('WHMCSDNS_TABLE_THROTTLE', 'mod_whmcs_dns_throttle');
 
 /**
  * Excecao de negocio: a mensagem e segura para o cliente final.
@@ -127,7 +128,11 @@ function whmcs_dns_config()
             ],
             'max_zones_per_client' => [
                 'FriendlyName' => 'Maximum Zones Per Client', 'Type' => 'text', 'Size' => '8',
-                'Default' => '0', 'Description' => '0 means unlimited. Applies when a client enables DNS.',
+                'Default' => '5', 'Description' => '0 means unlimited. Applies when a client enables DNS.',
+            ],
+            'max_records_per_zone' => [
+                'FriendlyName' => 'Maximum Records Per Zone', 'Type' => 'text', 'Size' => '8',
+                'Default' => '100', 'Description' => '0 means unlimited. Applies when a client adds a record.',
             ],
 
             'soa_email' => [
@@ -221,6 +226,15 @@ function whmcs_dns_activate()
 
                 // Foreign keys are optional in many WHMCS installs; enable only if you know your DB config allows it.
                 // $table->foreign('domain_id')->references('id')->on(WHMCSDNS_TABLE_ZONES)->onDelete('cascade');
+            });
+        }
+
+        if (!Capsule::schema()->hasTable(WHMCSDNS_TABLE_THROTTLE)) {
+            Capsule::schema()->create(WHMCSDNS_TABLE_THROTTLE, function ($table) {
+                /** @var \Illuminate\Database\Schema\Blueprint $table */
+                $table->bigInteger('client_id')->unsigned()->primary();
+                $table->integer('window_start');
+                $table->integer('hits')->default(0);
             });
         }
 
@@ -336,6 +350,67 @@ function whmcs_dns_provider_config(array $vars, string $domainName): array
 }
 
 /**
+ * Garante a tabela de throttle (instalacoes antigas nao rodam activate de novo).
+ */
+function whmcs_dns_ensure_throttle_table(): void
+{
+    static $ensured = false;
+    if ($ensured) {
+        return;
+    }
+
+    if (Capsule::schema()->hasTable(WHMCSDNS_TABLE_THROTTLE)) {
+        $ensured = true;
+        return;
+    }
+
+    try {
+        Capsule::schema()->create(WHMCSDNS_TABLE_THROTTLE, function ($table) {
+            /** @var \Illuminate\Database\Schema\Blueprint $table */
+            $table->bigInteger('client_id')->unsigned()->primary();
+            $table->integer('window_start');
+            $table->integer('hits')->default(0);
+        });
+    } catch (Throwable $e) {
+        // Corrida entre dois requests: se a tabela existe agora, segue.
+        if (!Capsule::schema()->hasTable(WHMCSDNS_TABLE_THROTTLE)) {
+            throw $e;
+        }
+    }
+
+    $ensured = true;
+}
+
+/**
+ * Janela fixa por cliente. O incremento e condicional no SQL (hits < limite),
+ * entao duas requisicoes concorrentes nao passam ambas no ultimo slot.
+ * E trava antiabuso, nao fronteira de seguranca.
+ */
+function whmcs_dns_rate_ok(int $clientId, int $limit = 30, int $windowSeconds = 60): bool
+{
+    whmcs_dns_ensure_throttle_table();
+
+    $table = WHMCSDNS_TABLE_THROTTLE;
+    $now = time();
+    $row = Capsule::table($table)->where('client_id', $clientId)->first();
+
+    if (!$row || ($now - (int)$row->window_start) >= $windowSeconds) {
+        Capsule::table($table)->updateOrInsert(
+            ['client_id' => $clientId],
+            ['window_start' => $now, 'hits' => 1]
+        );
+        return true;
+    }
+
+    $affected = (int) Capsule::connection()->update(
+        'UPDATE ' . $table . ' SET hits = hits + 1 WHERE client_id = ? AND window_start = ? AND hits < ?',
+        [$clientId, (int)$row->window_start, $limit]
+    );
+
+    return $affected === 1;
+}
+
+/**
  * Client area page
  */
 function whmcs_dns_clientarea($vars)
@@ -394,7 +469,10 @@ function whmcs_dns_clientarea($vars)
 
         $action = (string)$_POST['action'];
         $domainName = trim((string)($_POST['domain_name'] ?? ''));
-        if ($domainName === '') {
+        if (!whmcs_dns_rate_ok($clientId)) {
+            logActivity("WHMCS-DNS: throttle cliente={$clientId} acao={$action}");
+            $message = ['type' => 'error', 'text' => 'Muitas operacoes em pouco tempo. Aguarde um minuto.'];
+        } elseif ($domainName === '') {
             $message = ['type' => 'error', 'text' => 'Domain is required.'];
         } else {
             // Ownership check: must be in tbldomains for this user
@@ -421,17 +499,47 @@ function whmcs_dns_clientarea($vars)
                             if (Capsule::table(WHMCSDNS_TABLE_ZONES)->where('domain_name', $domainName)->exists()) {
                                 throw new WhmcsDnsUserException('This DNS zone is already managed by another client.');
                             }
-                            if ($zoneLimit > 0 && $zoneCount >= $zoneLimit) {
-                                throw new WhmcsDnsUserException('DNS zone limit reached. Disable a zone or contact support.');
-                            }
                             $cfg = whmcs_dns_provider_config($vars, $domainName);
 
                             $domainOrder = [
                                 'client_id' => $clientId,
                                 'config'    => json_encode($cfg, JSON_UNESCAPED_SLASHES),
                             ];
+                            $storedConfig = json_encode(
+                                ['provider' => (string)($cfg['provider'] ?? '')],
+                                JSON_UNESCAPED_SLASHES
+                            );
 
-                            $cardo->createDomain($domainOrder);
+                            // A2: reserva a linha na mesma transacao do count. A leitura
+                            // FOR UPDATE serializa por cliente (inclusive gap lock com 0 zonas).
+                            Capsule::connection()->transaction(function () use ($clientId, $zoneLimit, $domainName, $storedConfig) {
+                                $ids = Capsule::connection()->select(
+                                    'SELECT id FROM ' . WHMCSDNS_TABLE_ZONES . ' WHERE client_id = ? FOR UPDATE',
+                                    [$clientId]
+                                );
+                                if ($zoneLimit > 0 && count($ids) >= $zoneLimit) {
+                                    throw new WhmcsDnsUserException('DNS zone limit reached. Disable a zone or contact support.');
+                                }
+                                Capsule::table(WHMCSDNS_TABLE_ZONES)->insert([
+                                    'client_id'   => $clientId,
+                                    'domain_name' => $domainName,
+                                    'config'      => $storedConfig,
+                                    'created_at'  => date('Y-m-d H:i:s'),
+                                    'updated_at'  => date('Y-m-d H:i:s'),
+                                ]);
+                            });
+
+                            try {
+                                $cardo->createDomain($domainOrder);
+                            } catch (Throwable $e) {
+                                // Nao deixa zona fantasma local se o provider falhou.
+                                Capsule::table(WHMCSDNS_TABLE_ZONES)
+                                    ->where('domain_name', $domainName)
+                                    ->where('client_id', $clientId)
+                                    ->whereNull('zoneId')
+                                    ->delete();
+                                throw $e;
+                            }
 
                             // Ensure local row exists if Cardo DNS didn't insert it itself
                             $zone = Capsule::table(WHMCSDNS_TABLE_ZONES)->where('domain_name', $domainName)->first();
@@ -439,7 +547,7 @@ function whmcs_dns_clientarea($vars)
                                 Capsule::table(WHMCSDNS_TABLE_ZONES)->insert([
                                     'client_id'   => $clientId,
                                     'domain_name' => $domainName,
-                                    'config'      => $domainOrder['config'],
+                                    'config'      => $storedConfig,
                                     'created_at'  => date('Y-m-d H:i:s'),
                                     'updated_at'  => date('Y-m-d H:i:s'),
                                 ]);
@@ -529,6 +637,16 @@ function whmcs_dns_clientarea($vars)
                             ->first();
                         if (!$zone) {
                             throw new WhmcsDnsUserException('DNS is not enabled for this domain. Click "Enable DNS" first.');
+                        }
+
+                        $maxRecords = max(0, (int)($vars['max_records_per_zone'] ?? 0));
+                        if ($maxRecords > 0) {
+                            $recordCount = Capsule::table(WHMCSDNS_TABLE_RECORDS)
+                                ->where('domain_id', $zone->id)
+                                ->count();
+                            if ($recordCount >= $maxRecords) {
+                                throw new WhmcsDnsUserException('Limite de registros desta zona atingido. Remova um registro ou contate o suporte.');
+                            }
                         }
 
                         $req = [
