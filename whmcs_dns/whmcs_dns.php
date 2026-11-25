@@ -418,6 +418,29 @@ function whmcs_dns_provider_config(array $vars, string $domainName): array
 }
 
 /**
+ * Registra uma mutacao do cliente no Activity Log do WHMCS.
+ * Valores livres (host) sao normalizados para nao injetar quebra de linha.
+ * Nunca recebe record_value (TXT pode conter segredo do cliente).
+ */
+function whmcs_dns_audit(string $action, string $domain, int $clientId, array $extra = []): void
+{
+    $parts = ['WHMCS-DNS: ' . $action, 'dominio=' . $domain, 'cliente=' . $clientId];
+
+    foreach ($extra as $key => $value) {
+        if ($value === null || $value === '') {
+            continue;
+        }
+        $clean = preg_replace('/[\x00-\x1F\x7F]+/', ' ', (string)$value);
+        $clean = trim((string)$clean);
+        if ($clean === '') {
+            continue;
+        }
+        $parts[] = $key . '=' . mb_substr($clean, 0, 120);
+    }
+
+    logActivity(implode(' ', $parts));
+}
+
 /**
  * Status de dominio que autorizam gestao de DNS.
  *
@@ -684,6 +707,7 @@ function whmcs_dns_clientarea($vars)
                             }
 
                             $message = ['type' => 'success', 'text' => 'DNS enabled. Zone created.'];
+                            whmcs_dns_audit('enable_dns', $domainName, $clientId);
                             $zoneCount++;
                         }
                     }
@@ -721,6 +745,7 @@ function whmcs_dns_clientarea($vars)
                             Capsule::table(WHMCSDNS_TABLE_ZONES)->where('id', $zone->id)->delete();
 
                             $message = ['type' => 'success', 'text' => 'DNS disabled. Zone deleted.'];
+                            whmcs_dns_audit('disable_dns', $domainName, $clientId);
                             $zoneCount--;
                         }
                     }
@@ -812,6 +837,10 @@ function whmcs_dns_clientarea($vars)
                         $cardo->addRecord(array_merge(whmcs_dns_provider_config($vars, $domainName), $req));
 
                         $message = ['type' => 'success', 'text' => 'Record added.'];
+                        whmcs_dns_audit('add_record', $domainName, $clientId, [
+                            'tipo' => $recordType,
+                            'host' => $recordName,
+                        ]);
                     }
 
                     if ($action === 'update_record') {
@@ -932,6 +961,11 @@ function whmcs_dns_clientarea($vars)
                         }
 
                         $message = ['type' => 'success', 'text' => 'Record updated.'];
+                        whmcs_dns_audit('update_record', $domainName, $clientId, [
+                            'registro' => $rowId,
+                            'tipo' => strtoupper((string)$rec->type),
+                            'host' => $rec->host,
+                        ]);
                     }
 
                     if ($action === 'delete_record') {
@@ -991,6 +1025,11 @@ function whmcs_dns_clientarea($vars)
                         $cardo->delRecord(array_merge(whmcs_dns_provider_config($vars, $domainName), $req));
 
                         $message = ['type' => 'success', 'text' => 'Record deleted.'];
+                        whmcs_dns_audit('delete_record', $domainName, $clientId, [
+                            'registro' => $rowId,
+                            'tipo' => strtoupper((string)$rec->type),
+                            'host' => $rec->host,
+                        ]);
                     }
                     if ($action === 'enable_dnssec' || $action === 'disable_dnssec') {
                         $zone = Capsule::table(WHMCSDNS_TABLE_ZONES)
@@ -1008,6 +1047,7 @@ function whmcs_dns_clientarea($vars)
                         if ($action === 'enable_dnssec') $cardo->enableDNSSEC($config);
                         else $cardo->disableDNSSEC($config);
                         $message = ['type' => 'success', 'text' => 'DNSSEC updated.'];
+                        whmcs_dns_audit($action, $domainName, $clientId);
                     }
                 } catch (Throwable $e) {
                     $message = whmcs_dns_error_message($e, [
