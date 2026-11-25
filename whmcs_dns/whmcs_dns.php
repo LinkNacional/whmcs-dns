@@ -17,6 +17,37 @@ use Namingo\Cardo\DNS\Service as CardoService;
 
 define('WHMCSDNS_TABLE_ZONES', 'zones');
 define('WHMCSDNS_TABLE_RECORDS', 'records');
+define('WHMCSDNS_TABLE_THROTTLE', 'mod_whmcs_dns_throttle');
+
+/**
+ * Excecao de negocio: a mensagem e segura para o cliente final.
+ * Qualquer outra excecao (provider, banco, rede) vira mensagem generica + log.
+ */
+final class WhmcsDnsUserException extends RuntimeException
+{
+}
+
+/**
+ * Traduz uma excecao em mensagem de tela.
+ * Detalhe tecnico vai para Module Log e Activity Log, nunca para o cliente.
+ */
+function whmcs_dns_error_message(Throwable $e, array $context = []): array
+{
+    if ($e instanceof WhmcsDnsUserException) {
+        return ['type' => 'error', 'text' => $e->getMessage()];
+    }
+
+    $domain = (string)($context['domain'] ?? '');
+    $clientId = (int)($context['client_id'] ?? 0);
+    $action = (string)($context['action'] ?? 'clientarea');
+    $detail = $e->getMessage();
+
+    // Sem payload e sem credenciais: apenas a mensagem da excecao, truncada.
+    logModuleCall('whmcs_dns', $action, ['domain' => $domain, 'client_id' => $clientId], $detail);
+    logActivity("WHMCS-DNS: falha em {$action} dominio={$domain} cliente={$clientId}: " . mb_substr($detail, 0, 500));
+
+    return ['type' => 'error', 'text' => 'Nao foi possivel concluir a operacao. Tente novamente ou contate o suporte.'];
+}
 
 $autoload = __DIR__ . '/vendor/autoload.php';
 if (file_exists($autoload)) {
@@ -33,7 +64,7 @@ function whmcs_dns_config()
         'description' => 'DNS management addon enabling zone and record control via external providers',
         'author'      => 'Namingo',
         'language'    => 'english',
-        'version'     => '1.1.0',
+        'version'     => '1.2.0',
         'fields'      => [
             'provider' => [
                 'FriendlyName' => 'Provider',
@@ -97,7 +128,11 @@ function whmcs_dns_config()
             ],
             'max_zones_per_client' => [
                 'FriendlyName' => 'Maximum Zones Per Client', 'Type' => 'text', 'Size' => '8',
-                'Default' => '0', 'Description' => '0 means unlimited. Applies when a client enables DNS.',
+                'Default' => '5', 'Description' => '0 means unlimited. Applies when a client enables DNS.',
+            ],
+            'max_records_per_zone' => [
+                'FriendlyName' => 'Maximum Records Per Zone', 'Type' => 'text', 'Size' => '8',
+                'Default' => '100', 'Description' => '0 means unlimited. Applies when a client adds a record.',
             ],
 
             'soa_email' => [
@@ -194,6 +229,15 @@ function whmcs_dns_activate()
             });
         }
 
+        if (!Capsule::schema()->hasTable(WHMCSDNS_TABLE_THROTTLE)) {
+            Capsule::schema()->create(WHMCSDNS_TABLE_THROTTLE, function ($table) {
+                /** @var \Illuminate\Database\Schema\Blueprint $table */
+                $table->bigInteger('client_id')->unsigned()->primary();
+                $table->integer('window_start');
+                $table->integer('hits')->default(0);
+            });
+        }
+
         return ['status' => 'success', 'description' => 'WHMCS-DNS addon activated.'];
     } catch (Throwable $e) {
         return ['status' => 'error', 'description' => 'Activation failed: ' . $e->getMessage()];
@@ -201,35 +245,81 @@ function whmcs_dns_activate()
 }
 
 /**
- * Drop tables
+ * Deactivate: preserve data
+ *
+ * Tabelas zones/records sao preservadas para permitir reativacao sem perda
+ * de mapeamento. A purga e uma acao explicita do admin (whmcs_dns_output).
+ * Zonas no provedor externo NAO sao removidas ao desativar.
  */
 function whmcs_dns_deactivate()
 {
-    try {
-        if (Capsule::schema()->hasTable(WHMCSDNS_TABLE_RECORDS)) {
-            Capsule::schema()->drop(WHMCSDNS_TABLE_RECORDS);
-        }
-        if (Capsule::schema()->hasTable(WHMCSDNS_TABLE_ZONES)) {
-            Capsule::schema()->drop(WHMCSDNS_TABLE_ZONES);
-        }
-
-        return ['status' => 'success', 'description' => 'WHMCS-DNS addon deactivated.'];
-    } catch (Throwable $e) {
-        return ['status' => 'error', 'description' => 'Deactivation failed: ' . $e->getMessage()];
-    }
+    return [
+        'status' => 'success',
+        'description' => 'Addon desativado. As tabelas zones/records foram preservadas para reativacao. '
+            . 'As zonas criadas no provedor externo NAO foram removidas.',
+    ];
 }
 
 function whmcs_dns_upgrade($vars)
 {
-    // Keep for future migrations.
+    // Chamado pelo WHMCS quando a versao do addon sobe. Idempotente por design:
+    // cada migracao verifica o estado antes de alterar.
+    $version = (string) (whmcs_dns_config()['version'] ?? '');
+    logActivity('WHMCS-DNS: addon atualizado para a versao ' . ($version !== '' ? $version : 'desconhecida'));
 }
 
 function whmcs_dns_output($vars)
 {
+    $purgeDone = false;
+
+    if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) ($_POST['whmcs_dns_purge'] ?? '') === '1') {
+        check_token();
+
+        if ((string) ($_POST['confirm_purge'] ?? '') !== 'yes') {
+            echo '<div class="alert alert-warning">Purga cancelada: confirmacao ausente.</div>';
+        } elseif (!Capsule::schema()->hasTable(WHMCSDNS_TABLE_ZONES) || !Capsule::schema()->hasTable(WHMCSDNS_TABLE_RECORDS)) {
+            echo '<div class="alert alert-warning">Tabelas do addon nao existem. Nada a remover.</div>';
+        } else {
+            $zoneTotal = Capsule::table(WHMCSDNS_TABLE_ZONES)->count();
+            $recordTotal = Capsule::table(WHMCSDNS_TABLE_RECORDS)->count();
+            Capsule::table(WHMCSDNS_TABLE_RECORDS)->delete();
+            Capsule::table(WHMCSDNS_TABLE_ZONES)->delete();
+            logActivity("WHMCS-DNS: purga de dados locais executada (zonas={$zoneTotal}, registros={$recordTotal})");
+            $purgeDone = true;
+        }
+    }
+
+    if ($purgeDone) {
+        echo '<div class="alert alert-success">Dados locais removidos. As zonas no provedor externo NAO foram removidas.</div>';
+    }
+
+    $zoneCount = Capsule::schema()->hasTable(WHMCSDNS_TABLE_ZONES)
+        ? Capsule::table(WHMCSDNS_TABLE_ZONES)->count()
+        : 0;
+    $recordCount = Capsule::schema()->hasTable(WHMCSDNS_TABLE_RECORDS)
+        ? Capsule::table(WHMCSDNS_TABLE_RECORDS)->count()
+        : 0;
+
     echo '<div class="alert alert-info">
         Namingo DNS is configured from 
         <strong>Configuration → System Settings → Addon Modules</strong>.
         No additional administration is required here.
+    </div>';
+
+    echo '<div class="panel panel-default">
+        <div class="panel-heading"><strong>Dados locais</strong></div>
+        <div class="panel-body">
+            <p>Zonas mapeadas: <strong>' . (int) $zoneCount . '</strong> · Registros: <strong>' . (int) $recordCount . '</strong></p>
+            <p class="text-muted">Desativar o addon nao apaga estas tabelas e nao remove zonas no provedor externo.</p>
+            <form method="post" onsubmit="return confirm(\'Isto apaga TODOS os mapeamentos locais (zonas e registros). As zonas no provedor externo permanecem. Continuar?\');">
+                <input type="hidden" name="token" value="' . htmlspecialchars((function_exists('generate_token') ? (string) generate_token() : ''), ENT_QUOTES, 'UTF-8') . '" />
+                <input type="hidden" name="whmcs_dns_purge" value="1" />
+                <label style="font-weight:normal;">
+                    <input type="checkbox" name="confirm_purge" value="yes" required /> Confirmo a remocao dos dados locais
+                </label>
+                <button type="submit" class="btn btn-danger">Remover todos os dados locais</button>
+            </form>
+        </div>
     </div>';
 }
 
@@ -264,7 +354,7 @@ function whmcs_dns_deletion_config(array $vars, string $domainName, array $zoneC
     $storedProvider = (string)($zoneConfig['provider'] ?? '');
 
     if ($storedProvider === '' || $storedProvider !== (string)($config['provider'] ?? '')) {
-        throw new RuntimeException('DNS provider settings have changed. Contact support.');
+        throw new WhmcsDnsUserException('DNS provider settings have changed. Contact support.');
     }
 
     // Keep current credentials, but preserve the structural provider identity
@@ -306,6 +396,7 @@ function whmcs_dns_provider_config(array $vars, string $domainName): array
 }
 
 /**
+/**
  * Registra uma mutacao do cliente no Activity Log do WHMCS.
  * Valores livres (host) sao normalizados para nao injetar quebra de linha.
  * Nunca recebe record_value (TXT pode conter segredo do cliente).
@@ -327,6 +418,67 @@ function whmcs_dns_audit(string $action, string $domain, int $clientId, array $e
     }
 
     logActivity(implode(' ', $parts));
+}
+
+/**
+ * Garante a tabela de throttle (instalacoes antigas nao rodam activate de novo).
+ */
+function whmcs_dns_ensure_throttle_table(): void
+{
+    static $ensured = false;
+    if ($ensured) {
+        return;
+    }
+
+    if (Capsule::schema()->hasTable(WHMCSDNS_TABLE_THROTTLE)) {
+        $ensured = true;
+        return;
+    }
+
+    try {
+        Capsule::schema()->create(WHMCSDNS_TABLE_THROTTLE, function ($table) {
+            /** @var \Illuminate\Database\Schema\Blueprint $table */
+            $table->bigInteger('client_id')->unsigned()->primary();
+            $table->integer('window_start');
+            $table->integer('hits')->default(0);
+        });
+    } catch (Throwable $e) {
+        // Corrida entre dois requests: se a tabela existe agora, segue.
+        if (!Capsule::schema()->hasTable(WHMCSDNS_TABLE_THROTTLE)) {
+            throw $e;
+        }
+    }
+
+    $ensured = true;
+}
+
+/**
+ * Janela fixa por cliente. O incremento e condicional no SQL (hits < limite),
+ * entao duas requisicoes concorrentes nao passam ambas no ultimo slot.
+ * E trava antiabuso, nao fronteira de seguranca.
+ */
+function whmcs_dns_rate_ok(int $clientId, int $limit = 30, int $windowSeconds = 60): bool
+{
+    whmcs_dns_ensure_throttle_table();
+
+    $table = WHMCSDNS_TABLE_THROTTLE;
+    $now = time();
+    $row = Capsule::table($table)->where('client_id', $clientId)->first();
+
+    if (!$row || ($now - (int)$row->window_start) >= $windowSeconds) {
+        Capsule::table($table)->updateOrInsert(
+            ['client_id' => $clientId],
+            ['window_start' => $now, 'hits' => 1]
+        );
+        return true;
+    }
+
+    $affected = (int) Capsule::connection()->update(
+        'UPDATE ' . $table . ' SET hits = hits + 1 WHERE client_id = ? AND window_start = ? AND hits < ?',
+        [$clientId, (int)$row->window_start, $limit]
+    );
+
+    return $affected === 1;
 }
 
 /**
@@ -388,7 +540,10 @@ function whmcs_dns_clientarea($vars)
 
         $action = (string)$_POST['action'];
         $domainName = trim((string)($_POST['domain_name'] ?? ''));
-        if ($domainName === '') {
+        if (!whmcs_dns_rate_ok($clientId)) {
+            logActivity("WHMCS-DNS: throttle cliente={$clientId} acao={$action}");
+            $message = ['type' => 'error', 'text' => 'Muitas operacoes em pouco tempo. Aguarde um minuto.'];
+        } elseif ($domainName === '') {
             $message = ['type' => 'error', 'text' => 'Domain is required.'];
         } else {
             // Ownership check: must be in tbldomains for this user
@@ -413,10 +568,7 @@ function whmcs_dns_clientarea($vars)
                             $message = ['type' => 'success', 'text' => 'DNS is already enabled for this domain.'];
                         } else {
                             if (Capsule::table(WHMCSDNS_TABLE_ZONES)->where('domain_name', $domainName)->exists()) {
-                                throw new RuntimeException('This DNS zone is already managed by another client.');
-                            }
-                            if ($zoneLimit > 0 && $zoneCount >= $zoneLimit) {
-                                throw new RuntimeException('DNS zone limit reached. Disable a zone or contact support.');
+                                throw new WhmcsDnsUserException('This DNS zone is already managed by another client.');
                             }
                             $cfg = whmcs_dns_provider_config($vars, $domainName);
 
@@ -424,8 +576,41 @@ function whmcs_dns_clientarea($vars)
                                 'client_id' => $clientId,
                                 'config'    => json_encode($cfg, JSON_UNESCAPED_SLASHES),
                             ];
+                            $storedConfig = json_encode(
+                                ['provider' => (string)($cfg['provider'] ?? '')],
+                                JSON_UNESCAPED_SLASHES
+                            );
 
-                            $cardo->createDomain($domainOrder);
+                            // A2: reserva a linha na mesma transacao do count. A leitura
+                            // FOR UPDATE serializa por cliente (inclusive gap lock com 0 zonas).
+                            Capsule::connection()->transaction(function () use ($clientId, $zoneLimit, $domainName, $storedConfig) {
+                                $ids = Capsule::connection()->select(
+                                    'SELECT id FROM ' . WHMCSDNS_TABLE_ZONES . ' WHERE client_id = ? FOR UPDATE',
+                                    [$clientId]
+                                );
+                                if ($zoneLimit > 0 && count($ids) >= $zoneLimit) {
+                                    throw new WhmcsDnsUserException('DNS zone limit reached. Disable a zone or contact support.');
+                                }
+                                Capsule::table(WHMCSDNS_TABLE_ZONES)->insert([
+                                    'client_id'   => $clientId,
+                                    'domain_name' => $domainName,
+                                    'config'      => $storedConfig,
+                                    'created_at'  => date('Y-m-d H:i:s'),
+                                    'updated_at'  => date('Y-m-d H:i:s'),
+                                ]);
+                            });
+
+                            try {
+                                $cardo->createDomain($domainOrder);
+                            } catch (Throwable $e) {
+                                // Nao deixa zona fantasma local se o provider falhou.
+                                Capsule::table(WHMCSDNS_TABLE_ZONES)
+                                    ->where('domain_name', $domainName)
+                                    ->where('client_id', $clientId)
+                                    ->whereNull('zoneId')
+                                    ->delete();
+                                throw $e;
+                            }
 
                             // Ensure local row exists if Cardo DNS didn't insert it itself
                             $zone = Capsule::table(WHMCSDNS_TABLE_ZONES)->where('domain_name', $domainName)->first();
@@ -433,7 +618,7 @@ function whmcs_dns_clientarea($vars)
                                 Capsule::table(WHMCSDNS_TABLE_ZONES)->insert([
                                     'client_id'   => $clientId,
                                     'domain_name' => $domainName,
-                                    'config'      => $domainOrder['config'],
+                                    'config'      => $storedConfig,
                                     'created_at'  => date('Y-m-d H:i:s'),
                                     'updated_at'  => date('Y-m-d H:i:s'),
                                 ]);
@@ -457,11 +642,11 @@ function whmcs_dns_clientarea($vars)
                         } else {
                             $zoneConfig = json_decode((string)$zone->config, true);
                             if (!is_array($zoneConfig)) {
-                                throw new RuntimeException('Stored DNS zone configuration is invalid.');
+                                throw new WhmcsDnsUserException('Stored DNS zone configuration is invalid.');
                             }
 
                             if (!whmcs_dns_can_delete_zone($domainName, $zoneConfig)) {
-                                throw new RuntimeException(
+                                throw new WhmcsDnsUserException(
                                     'This DNS zone cannot be deleted through Cardo DNS. '
                                     . 'Gandi LiveDNS does not expose zone removal, and Scaleway managed root zones '
                                     . 'cannot be deleted independently. The zone has not been removed locally or remotely.'
@@ -500,8 +685,13 @@ function whmcs_dns_clientarea($vars)
                         $priority    = (isset($_POST['record_priority']) && $_POST['record_priority'] !== '')
                             ? (int)$_POST['record_priority'] : null;
 
+                        // Bunny nao expoe o tipo SPF (TYPE_MAP); SPF moderno e TXT (v=spf1 ...).
+                        if ($recordType === 'SPF' && $provider === 'Bunny') {
+                            $recordType = 'TXT';
+                        }
+
                         if ($recordType === '' || $recordValue === '') {
-                            throw new Exception('Record type and value are required.');
+                            throw new WhmcsDnsUserException('Record type and value are required.');
                         }
 
                         if ($recordType === 'MX' && $priority === null) {
@@ -524,7 +714,17 @@ function whmcs_dns_clientarea($vars)
                             ->where('client_id', $clientId)
                             ->first();
                         if (!$zone) {
-                            throw new Exception('DNS is not enabled for this domain. Click "Enable DNS" first.');
+                            throw new WhmcsDnsUserException('DNS is not enabled for this domain. Click "Enable DNS" first.');
+                        }
+
+                        $maxRecords = max(0, (int)($vars['max_records_per_zone'] ?? 0));
+                        if ($maxRecords > 0) {
+                            $recordCount = Capsule::table(WHMCSDNS_TABLE_RECORDS)
+                                ->where('domain_id', $zone->id)
+                                ->count();
+                            if ($recordCount >= $maxRecords) {
+                                throw new WhmcsDnsUserException('Limite de registros desta zona atingido. Remova um registro ou contate o suporte.');
+                            }
                         }
 
                         $req = [
@@ -570,7 +770,7 @@ function whmcs_dns_clientarea($vars)
                             ? (int)$_POST['record_priority'] : null;
 
                         if ($rowId <= 0) {
-                            throw new Exception('Invalid record row id.');
+                            throw new WhmcsDnsUserException('Invalid record row id.');
                         }
                         
                         if ($recordType === 'MX' && $priority === null) {
@@ -594,7 +794,7 @@ function whmcs_dns_clientarea($vars)
                             ->where('client_id', $clientId)
                             ->first();
                         if (!$zone) {
-                            throw new Exception('Zone not found. Refresh and try again.');
+                            throw new WhmcsDnsUserException('Zone not found. Refresh and try again.');
                         }
 
                         $rec = Capsule::table(WHMCSDNS_TABLE_RECORDS)
@@ -602,12 +802,24 @@ function whmcs_dns_clientarea($vars)
                             ->where('domain_id', $zone->id)
                             ->first();
                         if (!$rec) {
-                            throw new Exception('Record not found. Please refresh and try again.');
+                            throw new WhmcsDnsUserException('Record not found. Please refresh and try again.');
                         }
 
                         $oldValue = (string)($_POST['old_value'] ?? '');
                         if ($oldValue !== '' && (string)$rec->value !== $oldValue) {
-                            throw new Exception('Record changed since page load. Please refresh and try again.');
+                            throw new WhmcsDnsUserException('Record changed since page load. Please refresh and try again.');
+                        }
+
+                        // O tipo autoritativo e o da linha local; SPF legado no Bunny vira TXT.
+                        $recordType = strtoupper((string)$rec->type);
+                        if ($recordType === 'SPF' && $provider === 'Bunny') {
+                            $recordType = 'TXT';
+                        }
+                        if ($recordType === 'TXT') {
+                            $v = trim($recordValue);
+                            if ($v === '' || $v[0] !== '"' || substr($v, -1) !== '"') {
+                                $recordValue = '"' . str_replace('"', '\\"', $v) . '"';
+                            }
                         }
 
                         $zone = Capsule::table(WHMCSDNS_TABLE_ZONES)
@@ -615,7 +827,7 @@ function whmcs_dns_clientarea($vars)
                             ->where('client_id', $clientId)
                             ->first();
                         if (!$zone) {
-                            throw new Exception('DNS is not enabled for this domain. Click "Enable DNS" first.');
+                            throw new WhmcsDnsUserException('DNS is not enabled for this domain. Click "Enable DNS" first.');
                         }
 
                         $recordName = strtolower(trim((string)$rec->host));
@@ -633,7 +845,7 @@ function whmcs_dns_clientarea($vars)
                             'domain_name'      => $domainName,
                             'record_id'        => $rowId,
                             'record_name'      => $recordName,
-                            'record_type'      => strtoupper((string)$rec->type),
+                            'record_type'      => $recordType,
                             'record_value'     => $recordValue,
                             'old_value'        => (string)$rec->value,
                             'record_ttl'       => $ttl,
@@ -658,6 +870,14 @@ function whmcs_dns_clientarea($vars)
 
                         $cardo->updateRecord(array_merge(whmcs_dns_provider_config($vars, $domainName), $req));
 
+                        // Mantem a linha local coerente quando o tipo gravado era SPF (Bunny).
+                        if ($recordType !== strtoupper((string)$rec->type)) {
+                            Capsule::table(WHMCSDNS_TABLE_RECORDS)
+                                ->where('id', $rowId)
+                                ->where('domain_id', $zone->id)
+                                ->update(['type' => $recordType]);
+                        }
+
                         $message = ['type' => 'success', 'text' => 'Record updated.'];
                         whmcs_dns_audit('update_record', $domainName, $clientId, [
                             'registro' => $rowId,
@@ -669,7 +889,7 @@ function whmcs_dns_clientarea($vars)
                     if ($action === 'delete_record') {
                         $rowId = (int)($_POST['row_id'] ?? 0);
                         if ($rowId <= 0) {
-                            throw new Exception('Invalid record row id.');
+                            throw new WhmcsDnsUserException('Invalid record row id.');
                         }
 
                         $zone = Capsule::table(WHMCSDNS_TABLE_ZONES)
@@ -677,7 +897,7 @@ function whmcs_dns_clientarea($vars)
                             ->where('client_id', $clientId)
                             ->first();
                         if (!$zone) {
-                            throw new Exception('Zone not found. Refresh and try again.');
+                            throw new WhmcsDnsUserException('Zone not found. Refresh and try again.');
                         }
 
                         $rec = Capsule::table(WHMCSDNS_TABLE_RECORDS)
@@ -685,7 +905,7 @@ function whmcs_dns_clientarea($vars)
                             ->where('domain_id', $zone->id)
                             ->first();
                         if (!$rec) {
-                            throw new Exception('Record not found. Please refresh and try again.');
+                            throw new WhmcsDnsUserException('Record not found. Please refresh and try again.');
                         }
 
                         $zone = Capsule::table(WHMCSDNS_TABLE_ZONES)
@@ -693,7 +913,7 @@ function whmcs_dns_clientarea($vars)
                             ->where('client_id', $clientId)
                             ->first();
                         if (!$zone) {
-                            throw new Exception('DNS is not enabled for this domain. Click "Enable DNS" first.');
+                            throw new WhmcsDnsUserException('DNS is not enabled for this domain. Click "Enable DNS" first.');
                         }
 
                         $req = [
@@ -732,15 +952,15 @@ function whmcs_dns_clientarea($vars)
                     if ($action === 'enable_dnssec' || $action === 'disable_dnssec') {
                         $zone = Capsule::table(WHMCSDNS_TABLE_ZONES)
                             ->where('domain_name', $domainName)->where('client_id', $clientId)->first();
-                        if (!$zone) throw new RuntimeException('Enable DNS for this domain first.');
+                        if (!$zone) throw new WhmcsDnsUserException('Enable DNS for this domain first.');
                         $config = whmcs_dns_provider_config($vars, $domainName);
                         if ((json_decode((string)$zone->config, true)['provider'] ?? '') !== $config['provider']) {
-                            throw new RuntimeException('DNS provider settings have changed. Contact support.');
+                            throw new WhmcsDnsUserException('DNS provider settings have changed. Contact support.');
                         }
                         $capabilities = $cardo->getDNSSECCapabilities($config);
                         $operation = $action === 'enable_dnssec' ? 'can_enable' : 'can_disable';
                         if (!$capabilities['supported'] || !$capabilities[$operation]) {
-                            throw new RuntimeException('This provider does not support that DNSSEC action.');
+                            throw new WhmcsDnsUserException('This provider does not support that DNSSEC action.');
                         }
                         if ($action === 'enable_dnssec') $cardo->enableDNSSEC($config);
                         else $cardo->disableDNSSEC($config);
@@ -748,7 +968,11 @@ function whmcs_dns_clientarea($vars)
                         whmcs_dns_audit($action, $domainName, $clientId);
                     }
                 } catch (Throwable $e) {
-                    $message = ['type' => 'error', 'text' => $e->getMessage()];
+                    $message = whmcs_dns_error_message($e, [
+                        'domain' => $domainName,
+                        'client_id' => $clientId,
+                        'action' => $action,
+                    ]);
                 }
             }
         }
@@ -813,12 +1037,16 @@ function whmcs_dns_clientarea($vars)
                     $details = (new \Namingo\Cardo\DNS\Providers\Cloudflare($config))->getDomain($selectedDomain);
                     $nameservers = array_values(array_filter($details['name_servers'] ?? [], 'is_string'));
                 } catch (Throwable $e) {
-                    $message = ['type' => 'error', 'text' => 'Could not load assigned nameservers: ' . $e->getMessage()];
+                    $message = whmcs_dns_error_message($e, [
+                        'domain' => $selectedDomain,
+                        'client_id' => $clientId,
+                        'action' => 'nameservers',
+                    ]);
                 }
             }
             try {
                 if ((json_decode((string)$zone->config, true)['provider'] ?? '') !== $provider) {
-                    throw new RuntimeException('DNS provider settings have changed. Contact support.');
+                    throw new WhmcsDnsUserException('DNS provider settings have changed. Contact support.');
                 }
                 $capabilities = $cardo->getDNSSECCapabilities($config);
                 if ($capabilities['supported']) {
@@ -845,7 +1073,11 @@ function whmcs_dns_clientarea($vars)
                     ]);
                 }
             } catch (Throwable $e) {
-                $message = ['type' => 'error', 'text' => 'DNSSEC status unavailable: ' . $e->getMessage()];
+                $message = whmcs_dns_error_message($e, [
+                    'domain' => $selectedDomain,
+                    'client_id' => $clientId,
+                    'action' => 'dnssec_status',
+                ]);
             }
         }
     }
@@ -876,6 +1108,7 @@ function whmcs_dns_clientarea($vars)
         'requirelogin' => true,
         'vars'         => [
             'message'        => $message,
+            'token'          => function_exists('generate_token') ? (string) generate_token() : (string) ($GLOBALS['token'] ?? ''),
             'clientDomains'  => $clientDomains,
             'selectedDomain' => $selectedDomain,
             'zone'           => $zoneData,

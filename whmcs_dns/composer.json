@@ -1,6 +1,12 @@
 {
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "https://github.com/LinkNacional/cardo-dns"
+        }
+    ],
     "require": {
-        "namingo/plexdns": "^1.1.0"
+        "namingo/plexdns": "^1.1.3"
     },
     "config": {
         "allow-plugins": {
