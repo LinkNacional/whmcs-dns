@@ -321,6 +321,32 @@ function whmcs_dns_output($vars)
             </form>
         </div>
     </div>';
+
+    // Ultimas mutacoes registradas pelo client area (prefixo WHMCS-DNS:).
+    $entries = Capsule::table('tblactivitylog')
+        ->select('id', 'date', 'description')
+        ->where('description', 'like', 'WHMCS-DNS:%')
+        ->orderBy('id', 'desc')
+        ->limit(20)
+        ->get();
+
+    echo '<div class="panel panel-default">
+        <div class="panel-heading"><strong>Ultimas acoes (WHMCS-DNS)</strong></div>
+        <div class="panel-body">';
+
+    if (count($entries) === 0) {
+        echo '<p class="text-muted">Nenhuma acao registrada.</p>';
+    } else {
+        echo '<table class="table table-condensed table-striped">
+            <thead><tr><th>Data</th><th>Descricao</th></tr></thead><tbody>';
+        foreach ($entries as $entry) {
+            echo '<tr><td>' . htmlspecialchars((string) $entry->date, ENT_QUOTES, 'UTF-8') . '</td>'
+                . '<td>' . htmlspecialchars((string) $entry->description, ENT_QUOTES, 'UTF-8') . '</td></tr>';
+        }
+        echo '</tbody></table>';
+    }
+
+    echo '</div></div>';
 }
 
 function whmcs_dns_can_delete_zone(string $domainName, array $zoneConfig): bool
