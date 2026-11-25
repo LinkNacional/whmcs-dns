@@ -84,7 +84,7 @@ function whmcs_dns_config()
                     'Scaleway' => 'Scaleway',
                     'Vultr' => 'Vultr',
                 ],
-                'Default'      => 'Vultr',
+                'Default'      => 'Bunny',
                 'Description'  => 'Select your DNS provider from the list. Ensure you have an account with the chosen service.',
             ],
             'apikey' => [
