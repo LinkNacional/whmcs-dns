@@ -372,6 +372,28 @@ function whmcs_dns_deletion_config(array $vars, string $domainName, array $zoneC
     return $config;
 }
 
+/**
+ * Config persistido em zones.config.
+ *
+ * Nunca persiste credenciais (apikey, cloudns_auth_password, sharing_id).
+ * Mantem o provider e apenas as chaves estruturais que a delecao de zona
+ * Scaleway usa (project_id/parent_domain) — ver whmcs_dns_deletion_config().
+ */
+function whmcs_dns_zone_persistence_config(array $config): array
+{
+    $stored = ['provider' => (string)($config['provider'] ?? '')];
+
+    if ($stored['provider'] === 'Scaleway') {
+        foreach (['project_id', 'parent_domain'] as $key) {
+            if (array_key_exists($key, $config)) {
+                $stored[$key] = $config[$key];
+            }
+        }
+    }
+
+    return $stored;
+}
+
 function whmcs_dns_provider_config(array $vars, string $domainName): array
 {
     $config = [
@@ -396,7 +418,6 @@ function whmcs_dns_provider_config(array $vars, string $domainName): array
 }
 
 /**
-/**
  * Registra uma mutacao do cliente no Activity Log do WHMCS.
  * Valores livres (host) sao normalizados para nao injetar quebra de linha.
  * Nunca recebe record_value (TXT pode conter segredo do cliente).
@@ -418,6 +439,21 @@ function whmcs_dns_audit(string $action, string $domain, int $clientId, array $e
     }
 
     logActivity(implode(' ', $parts));
+}
+
+/**
+ * Status de dominio que autorizam gestao de DNS.
+ *
+ * Evidencia: lknclientdetailsmanager/ProfileCompleteness.php:18 trata
+ * Active, Pending, Pending Transfer, Grace e Redemption como dominio vivo.
+ * Aqui ficam de fora Pending e Pending Transfer: o dominio ainda nao esta
+ * autoritativo na conta (registro/transferencia em andamento), e provisionar
+ * zona consome cota do provedor. Ajustar esta lista e a unica mudanca
+ * necessaria para adotar outro conjunto.
+ */
+function whmcs_dns_allowed_domain_statuses(): array
+{
+    return ['Active', 'Grace', 'Redemption'];
 }
 
 /**
@@ -522,6 +558,29 @@ function whmcs_dns_clientarea($vars)
     $selectedDomain = trim((string)($_REQUEST['domain'] ?? ''));
     $message = null;
 
+    // Leitura: aceita dominio com status autorizado ou zona ja existente do cliente
+    // (zona de dominio expirado continua visivel para poder ser desativada).
+    if ($selectedDomain !== '') {
+        $eligible = false;
+        foreach ($clientDomains as $d) {
+            if ($d['domain'] === $selectedDomain
+                && in_array($d['status'], whmcs_dns_allowed_domain_statuses(), true)) {
+                $eligible = true;
+                break;
+            }
+        }
+        if (!$eligible) {
+            $hasZone = Capsule::table(WHMCSDNS_TABLE_ZONES)
+                ->where('domain_name', $selectedDomain)
+                ->where('client_id', $clientId)
+                ->exists();
+            if (!$hasZone) {
+                $message = ['type' => 'error', 'text' => 'Domain does not exist or is not active.'];
+                $selectedDomain = '';
+            }
+        }
+    }
+
     $pdo = Capsule::connection()->getPdo();
     $cardo = new CardoService($pdo);
 
@@ -547,12 +606,37 @@ function whmcs_dns_clientarea($vars)
             $message = ['type' => 'error', 'text' => 'Domain is required.'];
         } else {
             // Ownership check: must be in tbldomains for this user
-            $owns = Capsule::table('tbldomains')
+            $ownerRow = Capsule::table('tbldomains')
+                ->select('id', 'status')
                 ->where('userid', $clientId)
                 ->where('domain', $domainName)
+                ->first();
+            $ownsAny = $ownerRow !== null;
+            $ownsActive = $ownsAny
+                && in_array((string)$ownerRow->status, whmcs_dns_allowed_domain_statuses(), true);
+
+            // Desativar zona existente continua permitido com status inativo
+            // (o cliente precisa poder liberar a cota). Mutacoes nao.
+            $disableOnly = $action === 'disable_dns' && $ownsAny
+                && Capsule::table(WHMCSDNS_TABLE_ZONES)
+                    ->where('domain_name', $domainName)
+                    ->where('client_id', $clientId)
+                    ->exists();
+
+            // Dominio com outro titular ativo => nao permitir disputa silenciosa
+            $otherOwner = $ownsAny && Capsule::table('tbldomains')
+                ->where('domain', $domainName)
+                ->where('userid', '<>', $clientId)
+                ->whereIn('status', whmcs_dns_allowed_domain_statuses())
                 ->exists();
-            if (!$owns) {
+
+            if (!$ownsAny) {
                 $message = ['type' => 'error', 'text' => 'Domain does not exist.'];
+            } elseif (!$ownsActive && !$disableOnly) {
+                $message = ['type' => 'error', 'text' => 'Domain does not exist or is not active.'];
+            } elseif ($otherOwner && !$disableOnly) {
+                logActivity("WHMCS-DNS: conflito de titularidade dominio={$domainName} cliente={$clientId}");
+                $message = ['type' => 'error', 'text' => 'Este dominio esta em revisao de titularidade. Contate o suporte.'];
             } elseif ($provider === '') {
                 $message = ['type' => 'error', 'text' => 'DNS provider is not configured.'];
             } else {
@@ -576,10 +660,8 @@ function whmcs_dns_clientarea($vars)
                                 'client_id' => $clientId,
                                 'config'    => json_encode($cfg, JSON_UNESCAPED_SLASHES),
                             ];
-                            $storedConfig = json_encode(
-                                ['provider' => (string)($cfg['provider'] ?? '')],
-                                JSON_UNESCAPED_SLASHES
-                            );
+                            // Persistencia local sem credenciais; a chamada ao Cardo usa o config completo.
+                            $storedConfig = json_encode(whmcs_dns_zone_persistence_config($cfg), JSON_UNESCAPED_SLASHES);
 
                             // A2: reserva a linha na mesma transacao do count. A leitura
                             // FOR UPDATE serializa por cliente (inclusive gap lock com 0 zonas).
@@ -986,6 +1068,7 @@ function whmcs_dns_clientarea($vars)
     $records = [];
     $nameservers = [];
     $dnssec = null;
+    $persistedZoneConfig = [];
 
     if ($selectedDomain !== '') {
         $zone = Capsule::table(WHMCSDNS_TABLE_ZONES)
@@ -999,12 +1082,22 @@ function whmcs_dns_clientarea($vars)
                 $persistedZoneConfig = [];
             }
 
+            // Migracao pontual e idempotente: linhas gravadas pelo fallback antigo
+            // podiam carregar a apikey em zones.config. Reescreve sem credenciais.
+            $persistedSafe = whmcs_dns_zone_persistence_config($persistedZoneConfig);
+            if ($persistedSafe !== $persistedZoneConfig) {
+                Capsule::table(WHMCSDNS_TABLE_ZONES)
+                    ->where('id', $zone->id)
+                    ->update(['config' => json_encode($persistedSafe, JSON_UNESCAPED_SLASHES)]);
+                logActivity("WHMCS-DNS: zones.config sanitizado (zona={$zone->id}, cliente={$clientId})");
+                $persistedZoneConfig = $persistedSafe;
+            }
+
             $zoneData = [
                 'id'          => (int)$zone->id,
                 'domain_name' => (string)$zone->domain_name,
                 'created_at'  => (string)$zone->created_at,
                 'updated_at'  => (string)$zone->updated_at,
-                'config'      => $persistedZoneConfig,
             ];
 
             $records = Capsule::table(WHMCSDNS_TABLE_RECORDS)
@@ -1119,7 +1212,7 @@ function whmcs_dns_clientarea($vars)
             'zoneCount'      => $zoneCount,
             'provider'       => $provider,
             'canDisableZone' => $zoneData !== null
-                ? whmcs_dns_can_delete_zone($selectedDomain, $zoneData['config'] ?? [])
+                ? whmcs_dns_can_delete_zone($selectedDomain, $persistedZoneConfig)
                 : false,
         ],
     ];
