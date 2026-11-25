@@ -24,6 +24,7 @@
                   onsubmit="return confirm('Disable DNS and delete the zone for this domain?');"
                   class="m-0">
                 <input type="hidden" name="action" value="disable_dns" />
+                <input type="hidden" name="token" value="{$token}" />
                 <input type="hidden" name="domain_name" value="{$selectedDomain|escape}" />
                 <button type="submit" class="btn btn-outline-danger">
                     Disable DNS
@@ -38,6 +39,7 @@
                   action="index.php?m=whmcs_dns&domain={$selectedDomain|escape:'url'}"
                   class="m-0">
                 <input type="hidden" name="action" value="enable_dns" />
+                <input type="hidden" name="token" value="{$token}" />
                 <input type="hidden" name="domain_name" value="{$selectedDomain|escape}" />
                 <button type="submit" class="btn btn-outline-primary">
                     Enable DNS
@@ -81,6 +83,7 @@
         <form class="mb-4" method="post"
               action="index.php?m=whmcs_dns&domain={$selectedDomain|escape:'url'}">
             <input type="hidden" name="action" value="add_record" />
+            <input type="hidden" name="token" value="{$token}" />
             <input type="hidden" name="domain_name" value="{$zone.domain_name|escape}" />
 
             <div class="row g-3">
@@ -92,7 +95,7 @@
                         <option value="CNAME">CNAME</option>
                         <option value="MX">MX</option>
                         <option value="TXT">TXT</option>
-                        <option value="SPF">SPF</option>
+                        {if $provider != 'Bunny'}<option value="SPF">SPF</option>{/if}
                     </select>
                 </div>
 
@@ -181,6 +184,7 @@
                                       action="index.php?m=whmcs_dns&domain={$selectedDomain|escape:'url'}">
 
                                     <input type="hidden" name="action" value="update_record" />
+                                    <input type="hidden" name="token" value="{$token}" />
                                     <input type="hidden" name="domain_name" value="{$zone.domain_name|escape}" />
                                     <input type="hidden" name="row_id" value="{$r.id}" />
                                     <input type="hidden" name="old_value" value="{$r.value|escape}" />
@@ -218,6 +222,7 @@
                                 <form class="whmcsdns-delete-form d-inline" method="post"
                                       action="index.php?m=whmcs_dns&domain={$selectedDomain|escape:'url'}">
                                     <input type="hidden" name="action" value="delete_record" />
+                                    <input type="hidden" name="token" value="{$token}" />
                                     <input type="hidden" name="domain_name" value="{$zone.domain_name|escape}" />
                                     <input type="hidden" name="row_id" value="{$r.id}" />
 
@@ -277,6 +282,7 @@
                             {if !$dnssec.enabled && $dnssec.can_enable}
                                 <form method="post" action="index.php?m=whmcs_dns&domain={$selectedDomain|escape:'url'}">
                                     <input type="hidden" name="action" value="enable_dnssec" />
+                                    <input type="hidden" name="token" value="{$token}" />
                                     <input type="hidden" name="domain_name" value="{$zone.domain_name|escape}" />
                                     <button type="submit" class="btn btn-outline-success">Enable DNSSEC</button>
                                 </form>
@@ -284,6 +290,7 @@
                                 <form method="post" action="index.php?m=whmcs_dns&domain={$selectedDomain|escape:'url'}"
                                       onsubmit="return confirm('Remove DS records at your registrar before disabling DNSSEC, or the domain may stop resolving. Continue?');">
                                     <input type="hidden" name="action" value="disable_dnssec" />
+                                    <input type="hidden" name="token" value="{$token}" />
                                     <input type="hidden" name="domain_name" value="{$zone.domain_name|escape}" />
                                     <button type="submit" class="btn btn-outline-danger">Disable DNSSEC</button>
                                 </form>

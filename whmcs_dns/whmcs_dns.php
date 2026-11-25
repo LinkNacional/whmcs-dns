@@ -33,7 +33,7 @@ function whmcs_dns_config()
         'description' => 'DNS management addon enabling zone and record control via external providers',
         'author'      => 'Namingo',
         'language'    => 'english',
-        'version'     => '1.1.0',
+        'version'     => '1.2.0',
         'fields'      => [
             'provider' => [
                 'FriendlyName' => 'Provider',
@@ -201,35 +201,81 @@ function whmcs_dns_activate()
 }
 
 /**
- * Drop tables
+ * Deactivate: preserve data
+ *
+ * Tabelas zones/records sao preservadas para permitir reativacao sem perda
+ * de mapeamento. A purga e uma acao explicita do admin (whmcs_dns_output).
+ * Zonas no provedor externo NAO sao removidas ao desativar.
  */
 function whmcs_dns_deactivate()
 {
-    try {
-        if (Capsule::schema()->hasTable(WHMCSDNS_TABLE_RECORDS)) {
-            Capsule::schema()->drop(WHMCSDNS_TABLE_RECORDS);
-        }
-        if (Capsule::schema()->hasTable(WHMCSDNS_TABLE_ZONES)) {
-            Capsule::schema()->drop(WHMCSDNS_TABLE_ZONES);
-        }
-
-        return ['status' => 'success', 'description' => 'WHMCS-DNS addon deactivated.'];
-    } catch (Throwable $e) {
-        return ['status' => 'error', 'description' => 'Deactivation failed: ' . $e->getMessage()];
-    }
+    return [
+        'status' => 'success',
+        'description' => 'Addon desativado. As tabelas zones/records foram preservadas para reativacao. '
+            . 'As zonas criadas no provedor externo NAO foram removidas.',
+    ];
 }
 
 function whmcs_dns_upgrade($vars)
 {
-    // Keep for future migrations.
+    // Chamado pelo WHMCS quando a versao do addon sobe. Idempotente por design:
+    // cada migracao verifica o estado antes de alterar.
+    $version = (string) (whmcs_dns_config()['version'] ?? '');
+    logActivity('WHMCS-DNS: addon atualizado para a versao ' . ($version !== '' ? $version : 'desconhecida'));
 }
 
 function whmcs_dns_output($vars)
 {
+    $purgeDone = false;
+
+    if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) ($_POST['whmcs_dns_purge'] ?? '') === '1') {
+        check_token();
+
+        if ((string) ($_POST['confirm_purge'] ?? '') !== 'yes') {
+            echo '<div class="alert alert-warning">Purga cancelada: confirmacao ausente.</div>';
+        } elseif (!Capsule::schema()->hasTable(WHMCSDNS_TABLE_ZONES) || !Capsule::schema()->hasTable(WHMCSDNS_TABLE_RECORDS)) {
+            echo '<div class="alert alert-warning">Tabelas do addon nao existem. Nada a remover.</div>';
+        } else {
+            $zoneTotal = Capsule::table(WHMCSDNS_TABLE_ZONES)->count();
+            $recordTotal = Capsule::table(WHMCSDNS_TABLE_RECORDS)->count();
+            Capsule::table(WHMCSDNS_TABLE_RECORDS)->delete();
+            Capsule::table(WHMCSDNS_TABLE_ZONES)->delete();
+            logActivity("WHMCS-DNS: purga de dados locais executada (zonas={$zoneTotal}, registros={$recordTotal})");
+            $purgeDone = true;
+        }
+    }
+
+    if ($purgeDone) {
+        echo '<div class="alert alert-success">Dados locais removidos. As zonas no provedor externo NAO foram removidas.</div>';
+    }
+
+    $zoneCount = Capsule::schema()->hasTable(WHMCSDNS_TABLE_ZONES)
+        ? Capsule::table(WHMCSDNS_TABLE_ZONES)->count()
+        : 0;
+    $recordCount = Capsule::schema()->hasTable(WHMCSDNS_TABLE_RECORDS)
+        ? Capsule::table(WHMCSDNS_TABLE_RECORDS)->count()
+        : 0;
+
     echo '<div class="alert alert-info">
         Namingo DNS is configured from 
         <strong>Configuration → System Settings → Addon Modules</strong>.
         No additional administration is required here.
+    </div>';
+
+    echo '<div class="panel panel-default">
+        <div class="panel-heading"><strong>Dados locais</strong></div>
+        <div class="panel-body">
+            <p>Zonas mapeadas: <strong>' . (int) $zoneCount . '</strong> · Registros: <strong>' . (int) $recordCount . '</strong></p>
+            <p class="text-muted">Desativar o addon nao apaga estas tabelas e nao remove zonas no provedor externo.</p>
+            <form method="post" onsubmit="return confirm(\'Isto apaga TODOS os mapeamentos locais (zonas e registros). As zonas no provedor externo permanecem. Continuar?\');">
+                <input type="hidden" name="token" value="' . htmlspecialchars((function_exists('generate_token') ? (string) generate_token() : ''), ENT_QUOTES, 'UTF-8') . '" />
+                <input type="hidden" name="whmcs_dns_purge" value="1" />
+                <label style="font-weight:normal;">
+                    <input type="checkbox" name="confirm_purge" value="yes" required /> Confirmo a remocao dos dados locais
+                </label>
+                <button type="submit" class="btn btn-danger">Remover todos os dados locais</button>
+            </form>
+        </div>
     </div>';
 }
 
@@ -474,6 +520,11 @@ function whmcs_dns_clientarea($vars)
                         $priority    = (isset($_POST['record_priority']) && $_POST['record_priority'] !== '')
                             ? (int)$_POST['record_priority'] : null;
 
+                        // Bunny nao expoe o tipo SPF (TYPE_MAP); SPF moderno e TXT (v=spf1 ...).
+                        if ($recordType === 'SPF' && $provider === 'Bunny') {
+                            $recordType = 'TXT';
+                        }
+
                         if ($recordType === '' || $recordValue === '') {
                             throw new Exception('Record type and value are required.');
                         }
@@ -580,6 +631,18 @@ function whmcs_dns_clientarea($vars)
                             throw new Exception('Record changed since page load. Please refresh and try again.');
                         }
 
+                        // O tipo autoritativo e o da linha local; SPF legado no Bunny vira TXT.
+                        $recordType = strtoupper((string)$rec->type);
+                        if ($recordType === 'SPF' && $provider === 'Bunny') {
+                            $recordType = 'TXT';
+                        }
+                        if ($recordType === 'TXT') {
+                            $v = trim($recordValue);
+                            if ($v === '' || $v[0] !== '"' || substr($v, -1) !== '"') {
+                                $recordValue = '"' . str_replace('"', '\\"', $v) . '"';
+                            }
+                        }
+
                         $zone = Capsule::table(WHMCSDNS_TABLE_ZONES)
                             ->where('domain_name', $domainName)
                             ->where('client_id', $clientId)
@@ -603,7 +666,7 @@ function whmcs_dns_clientarea($vars)
                             'domain_name'      => $domainName,
                             'record_id'        => $rowId,
                             'record_name'      => $recordName,
-                            'record_type'      => strtoupper((string)$rec->type),
+                            'record_type'      => $recordType,
                             'record_value'     => $recordValue,
                             'old_value'        => (string)$rec->value,
                             'record_ttl'       => $ttl,
@@ -627,6 +690,14 @@ function whmcs_dns_clientarea($vars)
                         }
 
                         $cardo->updateRecord(array_merge(whmcs_dns_provider_config($vars, $domainName), $req));
+
+                        // Mantem a linha local coerente quando o tipo gravado era SPF (Bunny).
+                        if ($recordType !== strtoupper((string)$rec->type)) {
+                            Capsule::table(WHMCSDNS_TABLE_RECORDS)
+                                ->where('id', $rowId)
+                                ->where('domain_id', $zone->id)
+                                ->update(['type' => $recordType]);
+                        }
 
                         $message = ['type' => 'success', 'text' => 'Record updated.'];
                     }
@@ -835,6 +906,7 @@ function whmcs_dns_clientarea($vars)
         'requirelogin' => true,
         'vars'         => [
             'message'        => $message,
+            'token'          => function_exists('generate_token') ? (string) generate_token() : (string) ($GLOBALS['token'] ?? ''),
             'clientDomains'  => $clientDomains,
             'selectedDomain' => $selectedDomain,
             'zone'           => $zoneData,
