@@ -166,11 +166,20 @@
                         <div class="small text-muted">Os registros DNS são gerenciados no painel do cPanel.</div>
                     </div>
                 </div>
-                {if $mode != 'cpanel' && !$services.cpanel && $cartCpanel}
                 <div class="mt-auto">
-                    <a class="btn btn-primary btn-sm" href="{$cartCpanel|escape}">Contratar</a>
+                    {if $mode != 'cpanel' && $services.cpanel}
+                        {if ($nsOk || $nsCached) && $domainStatus == 'Active'}
+                            <form method="post" class="m-0" onsubmit="return confirm('Apontar o domínio para os nameservers do cPanel?');">
+                                <input type="hidden" name="token" value="{$token}" />
+                                <input type="hidden" name="dnspro_action" value="apply_preset" />
+                                <input type="hidden" name="preset" value="cpanel" />
+                                <button type="submit" class="btn btn-primary btn-sm">Ativar</button>
+                            </form>
+                        {/if}
+                    {elseif $mode != 'cpanel' && $cartCpanel}
+                        <a class="btn btn-primary btn-sm" href="{$cartCpanel|escape}">Contratar</a>
+                    {/if}
                 </div>
-                {/if}
             </div>
         </div>
     </div>
@@ -201,11 +210,20 @@
                         <div class="small text-muted">Os registros DNS são gerenciados no painel do DirectAdmin.</div>
                     </div>
                 </div>
-                {if $mode != 'directadmin' && !$services.directadmin && $cartDirectadmin}
                 <div class="mt-auto">
-                    <a class="btn btn-primary btn-sm" href="{$cartDirectadmin|escape}">Contratar</a>
+                    {if $mode != 'directadmin' && $services.directadmin}
+                        {if ($nsOk || $nsCached) && $domainStatus == 'Active'}
+                            <form method="post" class="m-0" onsubmit="return confirm('Apontar o domínio para os nameservers do DirectAdmin?');">
+                                <input type="hidden" name="token" value="{$token}" />
+                                <input type="hidden" name="dnspro_action" value="apply_preset" />
+                                <input type="hidden" name="preset" value="directadmin" />
+                                <button type="submit" class="btn btn-primary btn-sm">Ativar</button>
+                            </form>
+                        {/if}
+                    {elseif $mode != 'directadmin' && $cartDirectadmin}
+                        <a class="btn btn-primary btn-sm" href="{$cartDirectadmin|escape}">Contratar</a>
+                    {/if}
                 </div>
-                {/if}
             </div>
         </div>
     </div>

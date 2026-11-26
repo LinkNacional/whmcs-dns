@@ -849,8 +849,11 @@ function whmcs_dns_nameservers_view(array $vars, int $clientId): array
     $domainId = (int) $domain->id;
     $notice = null;
 
-    // Acao: aplicar o DNS Padrao (nameservers fixos do WHMCS).
-    if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) ($_POST['dnspro_action'] ?? '') === 'apply_default') {
+    $services = whmcs_dns_domain_services($clientId, (string) $domain->domain);
+
+    // Acoes: aplicar o DNS padrao ou os nameservers de um painel (cPanel/DirectAdmin).
+    $requestedAction = (string) ($_POST['dnspro_action'] ?? '');
+    if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && in_array($requestedAction, ['apply_default', 'apply_preset'], true)) {
         check_token();
         try {
             if (!whmcs_dns_rate_ok($clientId)) {
@@ -859,38 +862,58 @@ function whmcs_dns_nameservers_view(array $vars, int $clientId): array
             if ((string) $domain->status !== 'Active') {
                 throw new WhmcsDnsUserException('Este dominio nao esta ativo.');
             }
-            $def = whmcs_dns_default_ns();
-            if (count($def) < 2) {
-                throw new WhmcsDnsUserException('DNS padrao nao configurado no WHMCS.');
+
+            if ($requestedAction === 'apply_default') {
+                $targetNs = whmcs_dns_default_ns();
+                $targetMode = 'default';
+                $label = 'DNS Padrao';
+                if (count($targetNs) < 2) {
+                    throw new WhmcsDnsUserException('DNS padrao nao configurado no WHMCS.');
+                }
+            } else {
+                $preset = (string) ($_POST['preset'] ?? '');
+                $map = whmcs_dns_ns_map();
+                if (!in_array($preset, ['cpanel', 'directadmin'], true) || !isset($map[$preset])) {
+                    throw new WhmcsDnsUserException('Servico invalido.');
+                }
+                if (empty($services[$preset])) {
+                    throw new WhmcsDnsUserException('Voce nao tem um plano ativo desse tipo para este dominio.');
+                }
+                $targetNs = $map[$preset];
+                $targetMode = $preset;
+                $label = $preset === 'cpanel' ? 'cPanel' : 'DirectAdmin';
             }
+
             $payload = ['domainid' => $domainId];
             for ($i = 1; $i <= 5; $i++) {
-                $payload['ns' . $i] = $def[$i - 1] ?? '';
+                $payload['ns' . $i] = $targetNs[$i - 1] ?? '';
             }
             $res = localAPI('DomainUpdateNameservers', $payload);
             if (($res['result'] ?? '') !== 'success') {
                 throw new RuntimeException((string) ($res['error'] ?? $res['message'] ?? 'falha ao alterar nameservers'));
             }
-            Capsule::table(WHMCSDNS_TABLE_DOMAIN_STATE)->updateOrInsert(
-                ['domain_id' => $domainId],
-                [
-                    'client_id' => $clientId,
-                    'mode' => 'default',
-                    'status' => 'active',
-                    'default_ns' => json_encode($def, JSON_UNESCAPED_SLASHES),
-                    'last_ns' => json_encode($def, JSON_UNESCAPED_SLASHES),
-                    'last_error' => null,
-                ]
-            );
-            logActivity("WHMCS-DNS: DNS padrao aplicado dominio={$domain->domain} cliente={$clientId}");
-            $notice = ['type' => 'success', 'text' => 'DNS padrao aplicado. A propagacao pode levar algumas horas.'];
+
+            $stateRow = [
+                'client_id' => $clientId,
+                'mode' => $targetMode,
+                'status' => 'active',
+                'last_ns' => json_encode($targetNs, JSON_UNESCAPED_SLASHES),
+                'last_error' => null,
+            ];
+            if ($targetMode === 'default') {
+                $stateRow['default_ns'] = json_encode($targetNs, JSON_UNESCAPED_SLASHES);
+            }
+            Capsule::table(WHMCSDNS_TABLE_DOMAIN_STATE)->updateOrInsert(['domain_id' => $domainId], $stateRow);
+
+            logActivity("WHMCS-DNS: nameservers de {$targetMode} aplicados dominio={$domain->domain} cliente={$clientId}");
+            $notice = ['type' => 'success', 'text' => 'Nameservers aplicados (' . $label . '). A propagacao pode levar algumas horas.'];
         } catch (WhmcsDnsUserException $e) {
             $notice = ['type' => 'error', 'text' => $e->getMessage()];
         } catch (Throwable $e) {
             $notice = whmcs_dns_error_message($e, [
                 'domain' => (string) $domain->domain,
                 'client_id' => $clientId,
-                'action' => 'apply_default_ns',
+                'action' => 'apply_nameservers',
             ]);
         }
     }
@@ -929,8 +952,6 @@ function whmcs_dns_nameservers_view(array $vars, int $clientId): array
         ->where('domain_name', (string) $domain->domain)
         ->where('client_id', $clientId)
         ->first();
-    $services = whmcs_dns_domain_services($clientId, (string) $domain->domain);
-
     // Reconciliacao: se o NS e legivel e nao bate com o modo gravado, o NS manda
     // (ex.: cliente alterou pelo formulario nativo). DirectAdmin x Padrao nao se
     // distingue por NS, entao nao sobrescrevemos directadmin com default.
