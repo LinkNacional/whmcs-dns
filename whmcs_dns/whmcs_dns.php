@@ -690,11 +690,12 @@ function whmcs_dns_get_domain_ns(int $domainId): array
  */
 function whmcs_dns_domain_services(int $clientId, string $domain): array
 {
+    $normalized = strtolower(preg_replace('/^www\./', '', trim($domain)));
     $rows = Capsule::table('tblhosting as h')
         ->leftJoin('tblproducts as p', 'p.id', '=', 'h.packageid')
         ->leftJoin('tblservers as s', 's.id', '=', 'h.server')
         ->where('h.userid', $clientId)
-        ->where('h.domain', $domain)
+        ->whereRaw('LOWER(h.domain) IN (?, ?)', [$normalized, 'www.' . $normalized])
         ->where('h.domainstatus', 'Active')
         ->select('h.id', 'p.name as product', 's.type as servertype')
         ->get();
