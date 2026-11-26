@@ -46,8 +46,8 @@
 <h3 class="h5 mb-3">Serviços disponíveis para domínios</h3>
 
 <div class="row g-3">
-    <div class="col-md-6">
-        <div class="card h-100 mb-3">
+    <div class="col-md-6 mb-4">
+        <div class="card h-100">
             <div class="card-body d-flex flex-column">
                 <div class="d-flex align-items-start mb-2">
                     <div class="me-3" style="font-size:1.4rem;color:#3b5bfd;"><i class="fas fa-globe"></i></div>
@@ -77,13 +77,13 @@
         </div>
     </div>
 
-    <div class="col-md-6">
-        <div class="card h-100 mb-3">
+    <div class="col-md-6 mb-4">
+        <div class="card h-100">
             <div class="card-body d-flex flex-column">
                 <div class="d-flex align-items-start mb-2">
                     <div class="me-3" style="font-size:1.4rem;color:#6f42c1;"><i class="fas fa-cloud"></i></div>
                     <div class="flex-grow-1">
-                        <div class="h6 mb-1">DNS Personalizado</div>
+                        <div class="h6 mb-1">DNS Personalizado {if $mode == 'custom'}<span class="badge badge-success" style="margin-left:.25rem;">ATIVO</span>{/if}</div>
                         <div class="small text-muted">Use os nameservers da sua hospedagem ou do seu provedor de DNS.</div>
                     </div>
                 </div>
@@ -91,17 +91,14 @@
                     Atuais: {if $nsText}{$nsText|escape}{else}—{/if}
                 </div>
                 <div class="mt-auto">
-                    {if $mode == 'custom'}
-                        <span class="badge badge-success" style="margin-right:.5rem;">ATIVO</span>
-                    {/if}
                     <a class="btn btn-primary" href="{$nativeNsUrl|escape}">Configurar</a>
                 </div>
             </div>
         </div>
     </div>
 
-    <div class="col-md-6">
-        <div class="card h-100 mb-3">
+    <div class="col-md-6 mb-4">
+        <div class="card h-100">
             <div class="card-body d-flex flex-column">
                 <div class="d-flex align-items-start mb-2">
                     <div class="me-3" style="font-size:1.4rem;color:#0f766e;"><i class="fas fa-shield-alt"></i></div>
@@ -126,8 +123,8 @@
     </div>
 
     {if $services.cpanel || $mode == 'cpanel'}
-    <div class="col-md-6">
-        <div class="card h-100 mb-3">
+    <div class="col-md-6 mb-4">
+        <div class="card h-100">
             <div class="card-body d-flex flex-column">
                 <div class="d-flex align-items-start mb-2">
                     <div class="me-3" style="font-size:1.4rem;color:#fd7e14;"><i class="fas fa-server"></i></div>
@@ -151,8 +148,8 @@
     {/if}
 
     {if $services.directadmin || $mode == 'directadmin'}
-    <div class="col-md-6">
-        <div class="card h-100 mb-3">
+    <div class="col-md-6 mb-4">
+        <div class="card h-100">
             <div class="card-body d-flex flex-column">
                 <div class="d-flex align-items-start mb-2">
                     <div class="me-3" style="font-size:1.4rem;color:#0d6efd;"><i class="fas fa-cogs"></i></div>
