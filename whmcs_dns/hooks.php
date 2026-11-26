@@ -28,7 +28,7 @@ add_hook('ClientAreaPrimarySidebar', 1, function ($sidebar) {
         return;
     }
 
-    $domainId = (int) ($_GET['id'] ?? $_GET['domainid'] ?? 0);
+    $domainId = (int) ($_REQUEST['id'] ?? $_REQUEST['domainid'] ?? 0);
     if ($domainId <= 0) {
         return;
     }
@@ -108,7 +108,7 @@ add_hook('ClientAreaFooterOutput', 1, function () {
     if ((string) ($_GET['action'] ?? '') !== 'domaindetails' || empty($_SESSION['uid'])) {
         return '';
     }
-    $domainId = (int) ($_GET['id'] ?? 0);
+    $domainId = (int) ($_REQUEST['id'] ?? 0);
     if ($domainId <= 0) {
         return '';
     }

@@ -52,25 +52,30 @@
                 <div class="d-flex align-items-start mb-2">
                     <div class="me-3" style="font-size:1.4rem;color:#3b5bfd;"><i class="fas fa-globe"></i></div>
                     <div class="flex-grow-1">
-                        <div class="h6 mb-1">DNS Padrão <span class="badge badge-info" style="margin-left:.25rem;">Recomendado</span></div>
+                        <div class="h6 mb-1">DNS Padrão
+                            {if $mode == 'default'}
+                                <span class="badge badge-success" style="margin-left:.25rem;">ATIVO</span>
+                            {elseif $nsOk || $nsCached}
+                                <span class="badge badge-info" style="margin-left:.25rem;">Disponível</span>
+                            {else}
+                                <span class="badge badge-secondary" style="margin-left:.25rem;">Indisponível</span>
+                            {/if}
+                        </div>
                         <div class="small text-muted">Utilize nossos servidores DNS para gerenciar seu domínio de forma automática.</div>
                     </div>
                 </div>
-                <div class="small text-muted mb-3">{$defaultNsText|escape}</div>
+                <ul class="small text-muted mb-3" style="list-style:disc;padding-left:1.25rem;">
+                    {foreach $defaultNs as $nsItem}
+                        <li>{$nsItem|escape}</li>
+                    {/foreach}
+                </ul>
                 <div class="mt-auto">
-                    {if $mode == 'default'}
-                        <div class="badge badge-success">Em uso neste domínio</div>
-                    {elseif $nsOk || $nsCached}
-                        <div class="badge badge-light mb-2" style="border:1px solid #198754;color:#198754;">Disponível para uso</div>
-                        {if $domainStatus == 'Active'}
-                            <form method="post" class="m-0" onsubmit="return confirm('Aplicar os nameservers padrão neste domínio?');">
-                                <input type="hidden" name="token" value="{$token}" />
-                                <input type="hidden" name="dnspro_action" value="apply_default" />
-                                <button type="submit" class="btn btn-primary btn-sm">Ativar DNS Padrão</button>
-                            </form>
-                        {/if}
-                    {else}
-                        <div class="badge badge-light" style="border:1px solid #b02a37;color:#b02a37;">Indisponível para este domínio</div>
+                    {if $mode != 'default' && ($nsOk || $nsCached) && $domainStatus == 'Active'}
+                        <form method="post" class="m-0" onsubmit="return confirm('Aplicar os nameservers padrão neste domínio?');">
+                            <input type="hidden" name="token" value="{$token}" />
+                            <input type="hidden" name="dnspro_action" value="apply_default" />
+                            <button type="submit" class="btn btn-primary btn-sm">Ativar DNS Padrão</button>
+                        </form>
                     {/if}
                 </div>
             </div>
