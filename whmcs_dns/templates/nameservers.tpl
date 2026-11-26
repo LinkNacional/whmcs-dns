@@ -157,7 +157,7 @@
                                 <span class="badge badge-info" style="margin-left:.25rem;">Disponível</span>
                             {/if}
                         </div>
-                        <div class="small text-muted">Aponte o domínio para o seu plano de hospedagem cPanel da Link Nacional.</div>
+                        <div class="small text-muted">Esse painel de controle disponibiliza para o domínio diversos recursos como: e-mails, FTP, cron jobs, banco de dados, site e muito mais.</div>
                         <ul class="small text-muted mb-3" style="list-style:disc;padding-left:1.25rem;padding-top:0.88rem;">
                             {foreach $nsMap.cpanel as $nsItem}
                                 <li>{$nsItem|escape}</li>
@@ -192,7 +192,7 @@
                                 <span class="badge badge-info" style="margin-left:.25rem;">Disponível</span>
                             {/if}
                         </div>
-                        <div class="small text-muted">Aponte o domínio para o painel DirectAdmin da Link Nacional.</div>
+                        <div class="small text-muted">Esse painel de controle disponibiliza para o domínio diversos recursos como: e-mails, FTP, cron jobs, banco de dados, site, terminal, Node.js e muito mais.</div>
                         <ul class="small text-muted mb-3" style="list-style:disc;padding-left:1.25rem;padding-top:0.88rem;">
                             {foreach $nsMap.directadmin as $nsItem}
                                 <li>{$nsItem|escape}</li>
