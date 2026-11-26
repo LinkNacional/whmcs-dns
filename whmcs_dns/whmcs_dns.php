@@ -135,6 +135,10 @@ function whmcs_dns_config()
                 'FriendlyName' => 'cPanel product ID (link Contratar)', 'Type' => 'text', 'Size' => '8',
                 'Default' => '0', 'Description' => 'ID do produto cPanel no carrinho. 0 desativa o botao Contratar.',
             ],
+            'cart_pid_dnspro' => [
+                'FriendlyName' => 'DNS Pro product ID (link Contratar)', 'Type' => 'text', 'Size' => '8',
+                'Default' => '0', 'Description' => 'ID do produto DNS Pro no carrinho. 0 desativa o botao Contratar.',
+            ],
             'cart_pid_directadmin' => [
                 'FriendlyName' => 'DirectAdmin product ID (link Contratar)', 'Type' => 'text', 'Size' => '8',
                 'Default' => '0', 'Description' => 'ID do produto DirectAdmin no carrinho. 0 desativa o botao Contratar.',
@@ -707,6 +711,8 @@ function whmcs_dns_domain_services(int $clientId, string $domain): array
             $out['cpanel'] = ['id' => (int) $r->id, 'product' => (string) $r->product];
         } elseif ($type === 'directadmin' || $type === 'directadminExtended') {
             $out['directadmin'] = ['id' => (int) $r->id, 'product' => (string) $r->product];
+        } elseif ($type === 'dnspro') {
+            $out['dnspro'] = ['id' => (int) $r->id, 'product' => (string) $r->product];
         }
     }
 
@@ -801,10 +807,27 @@ function whmcs_dns_cart_url(int $pid, string $domain): string
         return '';
     }
 
+    // Ciclo: primeiro ciclo habilitado do produto (o DNS Pro e anual).
+    $cycle = 'monthly';
+    $currency = (int) Capsule::table('tblconfiguration')->where('setting', 'Currency')->value('value');
+    $pricing = Capsule::table('tblpricing')
+        ->where('type', 'product')
+        ->where('relid', $pid)
+        ->where('currency', $currency ?: 1)
+        ->first();
+    if ($pricing) {
+        foreach (['monthly', 'quarterly', 'semiannually', 'annually', 'biennially', 'triennially'] as $cand) {
+            if (isset($pricing->{$cand}) && (float) $pricing->{$cand} >= 0) {
+                $cycle = $cand;
+                break;
+            }
+        }
+    }
+
     return $base . '/cart.php?a=add&pid=' . $pid
         . '&carttpl=nexus_cart&domainoption=owndomain'
         . '&sld=' . urlencode($sld) . '&tld=' . urlencode($tld)
-        . '&billingcycle=monthly&skipconfig=1';
+        . '&billingcycle=' . $cycle . '&skipconfig=1';
 }
 
 /**
@@ -873,7 +896,7 @@ function whmcs_dns_nameservers_view(array $vars, int $clientId): array
             } else {
                 $preset = (string) ($_POST['preset'] ?? '');
                 $map = whmcs_dns_ns_map();
-                if (!in_array($preset, ['cpanel', 'directadmin'], true) || !isset($map[$preset])) {
+                if (!in_array($preset, ['cpanel', 'directadmin', 'dnspro'], true) || !isset($map[$preset])) {
                     throw new WhmcsDnsUserException('Serviço inválido.');
                 }
                 if (empty($services[$preset])) {
@@ -881,7 +904,7 @@ function whmcs_dns_nameservers_view(array $vars, int $clientId): array
                 }
                 $targetNs = $map[$preset];
                 $targetMode = $preset;
-                $label = $preset === 'cpanel' ? 'cPanel' : 'DirectAdmin';
+                $label = $preset === 'cpanel' ? 'cPanel' : ($preset === 'dnspro' ? 'DNS Pro' : 'DirectAdmin');
             }
 
             $payload = ['domainid' => $domainId];
@@ -970,6 +993,16 @@ function whmcs_dns_nameservers_view(array $vars, int $clientId): array
     }
 
     $mode = whmcs_dns_resolve_mode($state, $zone, $nsInfo['ns'], $defaultNs);
+
+    $cartDnspro = whmcs_dns_cart_url((int) ($vars['cart_pid_dnspro'] ?? 0), (string) $domain->domain);
+    $dnsProState = 'none';
+    if ($mode === 'dnspro' && $zone) {
+        $dnsProState = 'active';
+    } elseif (!empty($services['dnspro']) || $zone) {
+        $dnsProState = 'idle';
+    } elseif ($cartDnspro !== '') {
+        $dnsProState = 'buy';
+    }
     $nsMap = whmcs_dns_ns_map();
     $nsMapText = [];
     foreach ($nsMap as $key => $pair) {
@@ -1009,7 +1042,8 @@ function whmcs_dns_nameservers_view(array $vars, int $clientId): array
             'cartDirectadmin' => whmcs_dns_cart_url((int) ($vars['cart_pid_directadmin'] ?? 0), (string) $domain->domain),
             'nativeNsUrl' => 'clientarea.php?action=domaindetails&id=' . $domainId . '#tabNameservers',
             'dnsManagerUrl' => 'index.php?m=whmcs_dns&domain=' . urlencode((string) $domain->domain),
-            'dnsProState' => $zone ? ($mode === 'dnspro' ? 'active' : 'idle') : 'none',
+            'cartDnspro' => $cartDnspro,
+            'dnsProState' => $dnsProState,
         ],
     ];
 }
