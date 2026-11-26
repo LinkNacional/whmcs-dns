@@ -55,7 +55,7 @@ add_hook('ClientAreaPrimarySidebar', 1, function ($sidebar) {
         $panel->addChild('LknDnsNameservers', [
             'label' => 'DNS (Nomes Servidores)',
             'uri' => 'index.php?m=whmcs_dns&view=nameservers&domain=' . urlencode((string) $domain->domain),
-            'order' => 3,
+            'order' => 100,
         ]);
     }
 });
@@ -90,11 +90,62 @@ add_hook('ClientAreaPrimarySidebar', 2, function ($sidebar) {
     if (!$panel->getChild('LknDnsOverview')) {
         $panel->addChild('LknDnsOverview', ['label' => 'Visão geral', 'uri' => $base . '#tabOverview', 'order' => 1]);
         $panel->addChild('LknDnsAutorenew', ['label' => 'Renovação Automática', 'uri' => $base . '#tabAutorenew', 'order' => 2]);
+        $panel->addChild('LknDnsReglock', ['label' => 'Trava de Registro', 'uri' => $base . '#tabReglock', 'order' => 3]);
         $panel->addChild('LknDnsNameservers', [
             'label' => 'DNS (Nomes Servidores)',
             'uri' => 'index.php?m=whmcs_dns&view=nameservers&domain=' . urlencode((string) $domain->domain),
-            'order' => 3,
+            'order' => 100,
             'current' => true,
         ]);
     }
+});
+
+/**
+ * Aba nativa de nameservers: esconde a opcao "DNS padrao", garante "DNS
+ * personalizado" marcado e coloca um botao Cancelar que volta para a nossa tela.
+ */
+add_hook('ClientAreaFooterOutput', 1, function () {
+    if ((string) ($_GET['action'] ?? '') !== 'domaindetails' || empty($_SESSION['uid'])) {
+        return '';
+    }
+    $domainId = (int) ($_GET['id'] ?? 0);
+    if ($domainId <= 0) {
+        return '';
+    }
+    $domain = Capsule::table('tbldomains')
+        ->select('domain')
+        ->where('id', $domainId)
+        ->where('userid', (int) $_SESSION['uid'])
+        ->first();
+    if (!$domain || empty($domain->domain)) {
+        return '';
+    }
+
+    $url = 'index.php?m=whmcs_dns&view=nameservers&domain=' . urlencode((string) $domain->domain);
+    $urlJs = json_encode($url);
+
+    return <<<HTML
+<script>
+(function () {
+    var form = document.querySelector('#tabNameservers form');
+    if (!form) { return; }
+    var def = form.querySelector('input[name="nschoice"][value="default"]');
+    if (def) {
+        var wrap = def.closest('.form-check');
+        if (wrap) { wrap.style.display = 'none'; }
+    }
+    var custom = form.querySelector('input[name="nschoice"][value="custom"]');
+    if (custom) { custom.checked = true; }
+    var submit = form.querySelector('button[type="submit"], input[type="submit"]');
+    if (submit && !form.querySelector('.lkn-dns-cancel')) {
+        var a = document.createElement('a');
+        a.className = 'btn btn-default lkn-dns-cancel';
+        a.style.marginRight = '.5rem';
+        a.href = $urlJs;
+        a.textContent = 'Cancelar';
+        submit.parentNode.insertBefore(a, submit);
+    }
+})();
+</script>
+HTML;
 });

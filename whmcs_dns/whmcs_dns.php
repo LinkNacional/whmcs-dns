@@ -847,6 +847,24 @@ function whmcs_dns_nameservers_view(array $vars, int $clientId): array
         ->where('client_id', $clientId)
         ->first();
     $services = whmcs_dns_domain_services($clientId, (string) $domain->domain);
+
+    // Reconciliacao: se o NS e legivel e nao bate com o modo gravado, o NS manda
+    // (ex.: cliente alterou pelo formulario nativo). DirectAdmin x Padrao nao se
+    // distingue por NS, entao nao sobrescrevemos directadmin com default.
+    if ($state && $nsInfo['ok']) {
+        $derived = whmcs_dns_resolve_mode(null, $zone, $nsInfo['ns'], $defaultNs);
+        $stored = (string) $state->mode;
+        $ambiguous = ($derived === 'default' && $stored === 'directadmin');
+        if ($derived !== 'unknown' && $derived !== $stored && !$ambiguous) {
+            Capsule::table(WHMCSDNS_TABLE_DOMAIN_STATE)
+                ->where('domain_id', $domainId)
+                ->update(['mode' => $derived, 'status' => 'active']);
+            logActivity("WHMCS-DNS: modo reconciliado dominio={$domain->domain} de={$stored} para={$derived}");
+            $state->mode = $derived;
+            $state->status = 'active';
+        }
+    }
+
     $mode = whmcs_dns_resolve_mode($state, $zone, $nsInfo['ns'], $defaultNs);
     $nsMap = whmcs_dns_ns_map();
     $nsMapText = [];

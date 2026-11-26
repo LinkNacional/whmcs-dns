@@ -61,7 +61,7 @@
                     {if $mode == 'default'}
                         <div class="badge badge-success">Em uso neste domínio</div>
                     {elseif $nsOk || $nsCached}
-                        <div class="badge badge-light mb-2" style="border:1px solid #198754;color:#198754;">Disponível este domínio</div>
+                        <div class="badge badge-light mb-2" style="border:1px solid #198754;color:#198754;">Disponível para uso</div>
                         {if $domainStatus == 'Active'}
                             <form method="post" class="m-0" onsubmit="return confirm('Aplicar os nameservers padrão neste domínio?');">
                                 <input type="hidden" name="token" value="{$token}" />
