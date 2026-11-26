@@ -118,7 +118,9 @@
                             {if $dnsProState == 'active'}
                                 <span class="badge badge-success" style="margin-left:.25rem;">ATIVO</span>
                             {elseif $dnsProState == 'idle'}
-                                <span class="badge badge-info" style="margin-left:.25rem;">Disponível para configurar</span>
+                                <span class="badge badge-info" style="margin-left:.25rem;">Disponível</span>
+                            {elseif $dnsProState == 'buy'}
+                                <span class="badge badge-secondary" style="margin-left:.25rem;">Contratar</span>
                             {else}
                                 <span class="badge badge-secondary" style="margin-left:.25rem;">Em breve</span>
                             {/if}
@@ -134,6 +136,17 @@
                 <div class="mt-auto">
                     {if $dnsProState == 'active'}
                         <a class="btn btn-outline-secondary btn-sm" href="{$dnsManagerUrl|escape}">Gerenciar registros</a>
+                    {elseif $dnsProState == 'idle'}
+                        {if ($nsOk || $nsCached) && $domainStatus == 'Active'}
+                            <form method="post" class="m-0" onsubmit="return confirm('Apontar o domínio para os nameservers do DNS Pro?');">
+                                <input type="hidden" name="token" value="{$token}" />
+                                <input type="hidden" name="dnspro_action" value="apply_preset" />
+                                <input type="hidden" name="preset" value="dnspro" />
+                                <button type="submit" class="btn btn-primary btn-sm">Ativar</button>
+                            </form>
+                        {/if}
+                    {elseif $dnsProState == 'buy' && $cartDnspro}
+                        <a class="btn btn-primary btn-sm" href="{$cartDnspro|escape}">Contratar</a>
                     {/if}
                 </div>
             </div>
