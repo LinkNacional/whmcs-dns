@@ -140,7 +140,6 @@
         </div>
     </div>
 
-    {if $services.cpanel || $mode == 'cpanel'}
     <div class="col-md-6 mb-4">
         <div class="card h-100">
             <div class="card-body d-flex flex-column">
@@ -166,9 +165,7 @@
             </div>
         </div>
     </div>
-    {/if}
 
-    {if $services.directadmin || $mode == 'directadmin'}
     <div class="col-md-6 mb-4">
         <div class="card h-100">
             <div class="card-body d-flex flex-column">
@@ -194,6 +191,5 @@
             </div>
         </div>
     </div>
-    {/if}
 </div>
 {/if}
