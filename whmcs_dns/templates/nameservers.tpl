@@ -125,7 +125,7 @@
                                 <span class="badge badge-secondary" style="margin-left:.25rem;">Em breve</span>
                             {/if}
                         </div>
-                        <div class="small text-muted">Gerencie os registros DNS diretamente na Link Nacional, com recursos e controle.</div>
+                        <div class="small text-muted">Gerencie todos os registros (CNAME, TXT, MX) de DNS. Útil para configurar serviços externos. Exemplos: NuvemShop, Shopify, Google Sites.</div>
                         <ul class="small text-muted mb-3" style="list-style:disc;padding-left:1.25rem;padding-top:0.88rem;">
                             {foreach $nsMap.dnspro as $nsItem}
                                 <li>{$nsItem|escape}</li>
@@ -167,7 +167,7 @@
                             {elseif $cartCpanel}
                                 <span class="badge badge-secondary" style="margin-left:.25rem;">Contratar</span>
                             {else}
-                                <span class="badge badge-info" style="margin-left:.25rem;">Disponível</span>
+                                <span class="badge badge-secondary" style="margin-left:.25rem;">Indisponível</span>
                             {/if}
                         </div>
                         <div class="small text-muted">Esse painel de controle disponibiliza para o domínio diversos recursos como: e-mails, FTP, cron jobs, banco de dados, site e muito mais.</div>
@@ -211,7 +211,7 @@
                             {elseif $cartDirectadmin}
                                 <span class="badge badge-secondary" style="margin-left:.25rem;">Contratar</span>
                             {else}
-                                <span class="badge badge-info" style="margin-left:.25rem;">Disponível</span>
+                                <span class="badge badge-secondary" style="margin-left:.25rem;">Indisponível</span>
                             {/if}
                         </div>
                         <div class="small text-muted">Esse painel de controle disponibiliza para o domínio diversos recursos como: e-mails, FTP, cron jobs, banco de dados, site, terminal, Node.js e muito mais.</div>
