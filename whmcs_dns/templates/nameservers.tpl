@@ -26,7 +26,7 @@
             </div>
             <div class="small text-muted">
                 Nameservers atuais:
-                {if $ns}{$ns|join:', '|escape}{else}—{/if}
+                {if $nsText}{$nsText|escape}{else}—{/if}
             </div>
         </div>
         {if $mode == 'custom'}
@@ -48,7 +48,7 @@
                         <div class="small text-muted">Utilize nossos servidores DNS para gerenciar seu domínio de forma automática.</div>
                     </div>
                 </div>
-                <div class="small text-muted mb-3">{$defaultNs|join:' · '|escape}</div>
+                <div class="small text-muted mb-3">{$defaultNsText|escape}</div>
                 <div class="mt-auto">
                     {if $mode == 'default'}
                         <div class="badge badge-success">Em uso neste domínio</div>
@@ -73,7 +73,7 @@
                     </div>
                 </div>
                 <div class="small text-muted mb-3">
-                    Atuais: {if $ns}{$ns|join:', '|escape}{else}—{/if}
+                    Atuais: {if $nsText}{$nsText|escape}{else}—{/if}
                 </div>
                 <div class="mt-auto">
                     {if $mode == 'custom'}
@@ -95,7 +95,7 @@
                         <div class="small text-muted">Gerencie os registros DNS diretamente na Link Nacional, com recursos e controle.</div>
                     </div>
                 </div>
-                <div class="small text-muted mb-3">{$nsMap.dnspro|join:' · '|escape}</div>
+                <div class="small text-muted mb-3">{$nsMapText.dnspro|escape}</div>
                 <div class="mt-auto">
                     {if $dnsProState == 'active'}
                         <span class="badge badge-success">ATIVO</span>
@@ -121,7 +121,7 @@
                         <div class="small text-muted">Aponte o domínio para o seu plano de hospedagem cPanel da Link Nacional.</div>
                     </div>
                 </div>
-                <div class="small text-muted mb-3">{$nsMap.cpanel|join:' · '|escape}</div>
+                <div class="small text-muted mb-3">{$nsMapText.cpanel|escape}</div>
                 <div class="mt-auto">
                     {if $mode == 'cpanel'}
                         <span class="badge badge-success">ATIVO</span>
@@ -146,7 +146,7 @@
                         <div class="small text-muted">Aponte o domínio para o painel DirectAdmin da Link Nacional.</div>
                     </div>
                 </div>
-                <div class="small text-muted mb-3">{$nsMap.directadmin|join:' · '|escape}</div>
+                <div class="small text-muted mb-3">{$nsMapText.directadmin|escape}</div>
                 <div class="mt-auto">
                     {if $mode == 'directadmin'}
                         <span class="badge badge-success">ATIVO</span>

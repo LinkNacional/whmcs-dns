@@ -773,6 +773,11 @@ function whmcs_dns_nameservers_view(array $vars, int $clientId): array
     $state = Capsule::table(WHMCSDNS_TABLE_DOMAIN_STATE)->where('domain_id', $domainId)->first();
     $services = whmcs_dns_domain_services($clientId, (string) $domain->domain);
     $mode = whmcs_dns_resolve_mode($state, $zone, $nsInfo['ns'], $defaultNs);
+    $nsMap = whmcs_dns_ns_map();
+    $nsMapText = [];
+    foreach ($nsMap as $key => $pair) {
+        $nsMapText[$key] = implode(' · ', $pair);
+    }
 
     return [
         'pagetitle' => 'DNS - ' . $domain->domain,
@@ -784,10 +789,13 @@ function whmcs_dns_nameservers_view(array $vars, int $clientId): array
             'domainStatus' => (string) $domain->status,
             'registrar' => (string) $domain->registrar,
             'ns' => $nsInfo['ns'],
+            'nsText' => implode(', ', $nsInfo['ns']),
             'nsOk' => $nsInfo['ok'],
             'nsError' => $nsInfo['error'],
             'defaultNs' => $defaultNs,
-            'nsMap' => whmcs_dns_ns_map(),
+            'defaultNsText' => implode(' · ', $defaultNs),
+            'nsMap' => $nsMap,
+            'nsMapText' => $nsMapText,
             'mode' => $mode,
             'zone' => $zone,
             'services' => $services,
