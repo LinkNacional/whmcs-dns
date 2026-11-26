@@ -4,6 +4,10 @@
 <h2 class="mb-1">DNS do seu domínio</h2>
 <p class="text-muted mb-4">Escolha como deseja gerenciar os servidores de DNS do domínio <strong>{$domain|escape}</strong>.</p>
 
+{if $notice}
+    <div class="alert alert-{if $notice.type == 'success'}success{else}danger{/if} mb-4">{$notice.text|escape}</div>
+{/if}
+
 {if !$nsOk}
     <div class="alert alert-warning mb-4">
         {if $nsCached}
@@ -57,7 +61,14 @@
                     {if $mode == 'default'}
                         <div class="badge badge-success">Em uso neste domínio</div>
                     {elseif $nsOk || $nsCached}
-                        <div class="badge badge-light" style="border:1px solid #198754;color:#198754;">Disponível este domínio</div>
+                        <div class="badge badge-light mb-2" style="border:1px solid #198754;color:#198754;">Disponível este domínio</div>
+                        {if $domainStatus == 'Active'}
+                            <form method="post" class="m-0" onsubmit="return confirm('Aplicar os nameservers padrão neste domínio?');">
+                                <input type="hidden" name="token" value="{$token}" />
+                                <input type="hidden" name="dnspro_action" value="apply_default" />
+                                <button type="submit" class="btn btn-primary btn-sm">Ativar DNS Padrão</button>
+                            </form>
+                        {/if}
                     {else}
                         <div class="badge badge-light" style="border:1px solid #b02a37;color:#b02a37;">Indisponível para este domínio</div>
                     {/if}

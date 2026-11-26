@@ -773,6 +773,51 @@ function whmcs_dns_nameservers_view(array $vars, int $clientId): array
     }
 
     $domainId = (int) $domain->id;
+    $notice = null;
+
+    // Acao: aplicar o DNS Padrao (nameservers fixos do WHMCS).
+    if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) ($_POST['dnspro_action'] ?? '') === 'apply_default') {
+        check_token();
+        try {
+            if ((string) $domain->status !== 'Active') {
+                throw new WhmcsDnsUserException('Este dominio nao esta ativo.');
+            }
+            $def = whmcs_dns_default_ns();
+            if (count($def) < 2) {
+                throw new WhmcsDnsUserException('DNS padrao nao configurado no WHMCS.');
+            }
+            $payload = ['domainid' => $domainId];
+            for ($i = 1; $i <= 5; $i++) {
+                $payload['ns' . $i] = $def[$i - 1] ?? '';
+            }
+            $res = localAPI('DomainUpdateNameservers', $payload);
+            if (($res['result'] ?? '') !== 'success') {
+                throw new RuntimeException((string) ($res['error'] ?? $res['message'] ?? 'falha ao alterar nameservers'));
+            }
+            Capsule::table(WHMCSDNS_TABLE_DOMAIN_STATE)->updateOrInsert(
+                ['domain_id' => $domainId],
+                [
+                    'client_id' => $clientId,
+                    'mode' => 'default',
+                    'status' => 'active',
+                    'default_ns' => json_encode($def, JSON_UNESCAPED_SLASHES),
+                    'last_ns' => json_encode($def, JSON_UNESCAPED_SLASHES),
+                    'last_error' => null,
+                ]
+            );
+            logActivity("WHMCS-DNS: DNS padrao aplicado dominio={$domain->domain} cliente={$clientId}");
+            $notice = ['type' => 'success', 'text' => 'DNS padrao aplicado. A propagacao pode levar algumas horas.'];
+        } catch (WhmcsDnsUserException $e) {
+            $notice = ['type' => 'error', 'text' => $e->getMessage()];
+        } catch (Throwable $e) {
+            $notice = whmcs_dns_error_message($e, [
+                'domain' => (string) $domain->domain,
+                'client_id' => $clientId,
+                'action' => 'apply_default_ns',
+            ]);
+        }
+    }
+
     $nsInfo = whmcs_dns_get_domain_ns($domainId);
     $defaultNs = whmcs_dns_default_ns();
 
@@ -816,6 +861,8 @@ function whmcs_dns_nameservers_view(array $vars, int $clientId): array
             'index.php?m=whmcs_dns&view=nameservers&domain=' . urlencode((string) $domain->domain) => 'DNS',
         ],
         'vars' => [
+            'notice' => $notice,
+            'token' => function_exists('generate_token') ? (string) generate_token() : '',
             'domain' => (string) $domain->domain,
             'domainId' => $domainId,
             'domainStatus' => (string) $domain->status,
