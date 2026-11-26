@@ -149,6 +149,10 @@
                         <div class="h6 mb-1">cPanel
                             {if $mode == 'cpanel'}
                                 <span class="badge badge-success" style="margin-left:.25rem;">ATIVO</span>
+                            {elseif $services.cpanel}
+                                <span class="badge badge-info" style="margin-left:.25rem;">Disponível</span>
+                            {elseif $cartCpanel}
+                                <span class="badge badge-secondary" style="margin-left:.25rem;">Contratar</span>
                             {else}
                                 <span class="badge badge-info" style="margin-left:.25rem;">Disponível</span>
                             {/if}
@@ -162,6 +166,11 @@
                         <div class="small text-muted">Os registros DNS são gerenciados no painel do cPanel.</div>
                     </div>
                 </div>
+                {if $mode != 'cpanel' && !$services.cpanel && $cartCpanel}
+                <div class="mt-auto">
+                    <a class="btn btn-primary btn-sm" href="{$cartCpanel|escape}">Contratar</a>
+                </div>
+                {/if}
             </div>
         </div>
     </div>
@@ -175,6 +184,10 @@
                         <div class="h6 mb-1">DirectAdmin
                             {if $mode == 'directadmin'}
                                 <span class="badge badge-success" style="margin-left:.25rem;">ATIVO</span>
+                            {elseif $services.directadmin}
+                                <span class="badge badge-info" style="margin-left:.25rem;">Disponível</span>
+                            {elseif $cartDirectadmin}
+                                <span class="badge badge-secondary" style="margin-left:.25rem;">Contratar</span>
                             {else}
                                 <span class="badge badge-info" style="margin-left:.25rem;">Disponível</span>
                             {/if}
@@ -188,6 +201,11 @@
                         <div class="small text-muted">Os registros DNS são gerenciados no painel do DirectAdmin.</div>
                     </div>
                 </div>
+                {if $mode != 'directadmin' && !$services.directadmin && $cartDirectadmin}
+                <div class="mt-auto">
+                    <a class="btn btn-primary btn-sm" href="{$cartDirectadmin|escape}">Contratar</a>
+                </div>
+                {/if}
             </div>
         </div>
     </div>

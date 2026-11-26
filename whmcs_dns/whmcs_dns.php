@@ -131,6 +131,14 @@ function whmcs_dns_config()
                 'FriendlyName' => 'Maximum Zones Per Client', 'Type' => 'text', 'Size' => '8',
                 'Default' => '5', 'Description' => '0 means unlimited. Applies when a client enables DNS.',
             ],
+            'cart_pid_cpanel' => [
+                'FriendlyName' => 'cPanel product ID (link Contratar)', 'Type' => 'text', 'Size' => '8',
+                'Default' => '0', 'Description' => 'ID do produto cPanel no carrinho. 0 desativa o botao Contratar.',
+            ],
+            'cart_pid_directadmin' => [
+                'FriendlyName' => 'DirectAdmin product ID (link Contratar)', 'Type' => 'text', 'Size' => '8',
+                'Default' => '0', 'Description' => 'ID do produto DirectAdmin no carrinho. 0 desativa o botao Contratar.',
+            ],
             'max_records_per_zone' => [
                 'FriendlyName' => 'Maximum Records Per Zone', 'Type' => 'text', 'Size' => '8',
                 'Default' => '100', 'Description' => '0 means unlimited. Applies when a client adds a record.',
@@ -737,6 +745,68 @@ function whmcs_dns_resolve_mode($state, $zone, array $ns, array $defaultNs): str
 }
 
 /**
+ * Separa dominio em sld/tld usando a lista de TLDs do WHMCS (longest match).
+ */
+function whmcs_dns_split_domain(string $domain): array
+{
+    static $tlds = null;
+    $domain = strtolower(trim($domain));
+
+    if ($tlds === null) {
+        $tlds = [];
+        try {
+            foreach (Capsule::table('tbldomainpricing')->select('extension')->get() as $row) {
+                $ext = strtolower(trim((string) $row->extension));
+                if ($ext !== '') {
+                    $tlds[] = $ext;
+                }
+            }
+        } catch (Throwable $e) {
+            $tlds = [];
+        }
+        usort($tlds, static function ($a, $b) {
+            return strlen($b) <=> strlen($a);
+        });
+    }
+
+    foreach ($tlds as $ext) {
+        if (str_ends_with($domain, $ext) && strlen($domain) > strlen($ext)) {
+            return [substr($domain, 0, -strlen($ext)), $ext];
+        }
+    }
+
+    $pos = strpos($domain, '.');
+    if ($pos === false) {
+        return [$domain, ''];
+    }
+
+    return [substr($domain, 0, $pos), substr($domain, $pos)];
+}
+
+/**
+ * Link de compra do produto no carrinho, com dominio pre-preenchido.
+ */
+function whmcs_dns_cart_url(int $pid, string $domain): string
+{
+    if ($pid <= 0) {
+        return '';
+    }
+    [$sld, $tld] = whmcs_dns_split_domain($domain);
+    if ($sld === '' || $tld === '') {
+        return '';
+    }
+    $base = rtrim((string) Capsule::table('tblconfiguration')->where('setting', 'SystemURL')->value('value'), '/');
+    if ($base === '') {
+        return '';
+    }
+
+    return $base . '/cart.php?a=add&pid=' . $pid
+        . '&carttpl=nexus_cart&domainoption=owndomain'
+        . '&sld=' . urlencode($sld) . '&tld=' . urlencode($tld)
+        . '&billingcycle=monthly&skipconfig=1';
+}
+
+/**
  * Pagina "DNS (Nomes Servidores)" - cards de servico do dominio.
  * Fase 1: somente leitura; nenhuma acao de escrita.
  */
@@ -913,6 +983,8 @@ function whmcs_dns_nameservers_view(array $vars, int $clientId): array
             'mode' => $mode,
             'zone' => $zone,
             'services' => $services,
+            'cartCpanel' => whmcs_dns_cart_url((int) ($vars['cart_pid_cpanel'] ?? 0), (string) $domain->domain),
+            'cartDirectadmin' => whmcs_dns_cart_url((int) ($vars['cart_pid_directadmin'] ?? 0), (string) $domain->domain),
             'nativeNsUrl' => 'clientarea.php?action=domaindetails&id=' . $domainId . '#tabNameservers',
             'dnsManagerUrl' => 'index.php?m=whmcs_dns&domain=' . urlencode((string) $domain->domain),
             'dnsProState' => $zone ? ($mode === 'dnspro' ? 'active' : 'idle') : 'none',
