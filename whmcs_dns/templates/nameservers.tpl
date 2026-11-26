@@ -6,7 +6,11 @@
 
 {if !$nsOk}
     <div class="alert alert-warning mb-4">
-        Não foi possível ler os nameservers agora ({$nsError|escape}). Os status abaixo podem estar incompletos — fale com o suporte se persistir.
+        {if $nsCached}
+            Não foi possível ler os nameservers agora ({$nsError|escape}); exibindo a última leitura conhecida.
+        {else}
+            Não foi possível ler os nameservers agora ({$nsError|escape}). Os status abaixo podem estar incompletos — fale com o suporte se persistir.
+        {/if}
     </div>
 {/if}
 
@@ -52,7 +56,7 @@
                 <div class="mt-auto">
                     {if $mode == 'default'}
                         <div class="badge badge-success">Em uso neste domínio</div>
-                    {elseif $nsOk}
+                    {elseif $nsOk || $nsCached}
                         <div class="badge badge-light" style="border:1px solid #198754;color:#198754;">Disponível este domínio</div>
                     {else}
                         <div class="badge badge-light" style="border:1px solid #b02a37;color:#b02a37;">Indisponível para este domínio</div>

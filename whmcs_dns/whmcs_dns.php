@@ -250,6 +250,7 @@ function whmcs_dns_activate()
                 $table->bigInteger('service_id')->unsigned()->nullable();
                 $table->bigInteger('zone_id')->unsigned()->nullable();
                 $table->text('default_ns')->nullable();
+                $table->text('last_ns')->nullable();
                 $table->text('last_error')->nullable();
                 $table->dateTime('created_at')->useCurrent();
                 $table->dateTime('updated_at')->useCurrent()->useCurrentOnUpdate();
@@ -582,6 +583,7 @@ function whmcs_dns_ensure_domain_state_table(): void
                 $table->bigInteger('service_id')->unsigned()->nullable();
                 $table->bigInteger('zone_id')->unsigned()->nullable();
                 $table->text('default_ns')->nullable();
+                $table->text('last_ns')->nullable();
                 $table->text('last_error')->nullable();
                 $table->dateTime('created_at')->useCurrent();
                 $table->dateTime('updated_at')->useCurrent()->useCurrentOnUpdate();
@@ -591,6 +593,12 @@ function whmcs_dns_ensure_domain_state_table(): void
                 throw $e;
             }
         }
+    }
+    if (!Capsule::schema()->hasColumn(WHMCSDNS_TABLE_DOMAIN_STATE, 'last_ns')) {
+        Capsule::schema()->table(WHMCSDNS_TABLE_DOMAIN_STATE, function ($table) {
+            /** @var \Illuminate\Database\Schema\Blueprint $table */
+            $table->text('last_ns')->nullable();
+        });
     }
     $done = true;
 }
@@ -766,11 +774,29 @@ function whmcs_dns_nameservers_view(array $vars, int $clientId): array
     $domainId = (int) $domain->id;
     $nsInfo = whmcs_dns_get_domain_ns($domainId);
     $defaultNs = whmcs_dns_default_ns();
+
+    $state = Capsule::table(WHMCSDNS_TABLE_DOMAIN_STATE)->where('domain_id', $domainId)->first();
+    $lastNs = [];
+    if ($state && !empty($state->last_ns)) {
+        $decoded = json_decode((string) $state->last_ns, true);
+        $lastNs = is_array($decoded) ? whmcs_dns_normalize_ns($decoded) : [];
+    }
+    $nsCached = false;
+    if ($nsInfo['ok']) {
+        if ($nsInfo['ns'] !== $lastNs) {
+            Capsule::table(WHMCSDNS_TABLE_DOMAIN_STATE)->updateOrInsert(
+                ['domain_id' => $domainId],
+                ['client_id' => $clientId, 'last_ns' => json_encode($nsInfo['ns'], JSON_UNESCAPED_SLASHES)]
+            );
+        }
+    } elseif ($lastNs !== []) {
+        $nsInfo['ns'] = $lastNs;
+        $nsCached = true;
+    }
     $zone = Capsule::table(WHMCSDNS_TABLE_ZONES)
         ->where('domain_name', (string) $domain->domain)
         ->where('client_id', $clientId)
         ->first();
-    $state = Capsule::table(WHMCSDNS_TABLE_DOMAIN_STATE)->where('domain_id', $domainId)->first();
     $services = whmcs_dns_domain_services($clientId, (string) $domain->domain);
     $mode = whmcs_dns_resolve_mode($state, $zone, $nsInfo['ns'], $defaultNs);
     $nsMap = whmcs_dns_ns_map();
@@ -791,6 +817,7 @@ function whmcs_dns_nameservers_view(array $vars, int $clientId): array
             'ns' => $nsInfo['ns'],
             'nsText' => implode(', ', $nsInfo['ns']),
             'nsOk' => $nsInfo['ok'],
+            'nsCached' => $nsCached,
             'nsError' => $nsInfo['error'],
             'defaultNs' => $defaultNs,
             'defaultNsText' => implode(' · ', $defaultNs),
