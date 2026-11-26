@@ -127,6 +127,18 @@ add_hook('ClientAreaFooterOutput', 1, function () {
     return <<<HTML
 <script>
 (function () {
+    if (window.location.hash === '#tabNameservers') {
+        try {
+            if (window.jQuery) {
+                window.jQuery('a[href="#tabNameservers"], .tabControlLink[href="#tabNameservers"]').tab('show');
+            }
+        } catch (e) {}
+        var pane = document.getElementById('tabNameservers');
+        if (pane && pane.className.indexOf('active') === -1) {
+            pane.className += ' active show';
+        }
+    }
+
     var form = document.querySelector('#tabNameservers form');
     if (!form) { return; }
     var def = form.querySelector('input[name="nschoice"][value="default"]');
