@@ -51,7 +51,7 @@
             <div class="card-body d-flex flex-column">
                 <div class="d-flex align-items-start mb-2">
                     <div class="me-3" style="font-size:1.4rem;color:#3b5bfd;"><i class="fas fa-globe"></i></div>
-                    <div class="flex-grow-1">
+                    <div class="flex-grow-1" style="padding: 8px;">
                         <div class="h6 mb-1">DNS Padrão
                             {if $mode == 'default'}
                                 <span class="badge badge-success" style="margin-left:.25rem;">ATIVO</span>
@@ -62,13 +62,13 @@
                             {/if}
                         </div>
                         <div class="small text-muted">Utilize nossos servidores DNS para gerenciar seu domínio de forma automática.</div>
+                        <ul class="small text-muted mb-3" style="list-style:disc;padding-left:1.25rem;padding-top:0.88rem;">
+                            {foreach $defaultNs as $nsItem}
+                                <li>{$nsItem|escape}</li>
+                            {/foreach}
+                        </ul>
                     </div>
                 </div>
-                <ul class="small text-muted mb-3" style="list-style:disc;padding-left:1.25rem;">
-                    {foreach $defaultNs as $nsItem}
-                        <li>{$nsItem|escape}</li>
-                    {/foreach}
-                </ul>
                 <div class="mt-auto">
                     {if $mode != 'default' && ($nsOk || $nsCached) && $domainStatus == 'Active'}
                         <form method="post" class="m-0" onsubmit="return confirm('Aplicar os nameservers padrão neste domínio?');">
