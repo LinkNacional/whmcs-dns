@@ -782,6 +782,9 @@ function whmcs_dns_nameservers_view(array $vars, int $clientId): array
     if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) ($_POST['dnspro_action'] ?? '') === 'apply_default') {
         check_token();
         try {
+            if (!whmcs_dns_rate_ok($clientId)) {
+                throw new WhmcsDnsUserException('Muitas operacoes em pouco tempo. Aguarde um minuto.');
+            }
             if ((string) $domain->status !== 'Active') {
                 throw new WhmcsDnsUserException('Este dominio nao esta ativo.');
             }
@@ -837,6 +840,15 @@ function whmcs_dns_nameservers_view(array $vars, int $clientId): array
                 ['domain_id' => $domainId],
                 ['client_id' => $clientId, 'last_ns' => json_encode($nsInfo['ns'], JSON_UNESCAPED_SLASHES)]
             );
+        }
+        // Snapshot do DNS padrao do dominio: so quando o NS atual e o padrao global
+        // e ainda nao existe um default_ns gravado (nunca sobrescreve).
+        if ((!$state || empty($state->default_ns))
+            && whmcs_dns_normalize_ns($nsInfo['ns']) === whmcs_dns_normalize_ns($defaultNs)
+        ) {
+            Capsule::table(WHMCSDNS_TABLE_DOMAIN_STATE)
+                ->where('domain_id', $domainId)
+                ->update(['default_ns' => json_encode($nsInfo['ns'], JSON_UNESCAPED_SLASHES)]);
         }
     } elseif ($lastNs !== []) {
         $nsInfo['ns'] = $lastNs;
