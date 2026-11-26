@@ -857,10 +857,10 @@ function whmcs_dns_nameservers_view(array $vars, int $clientId): array
         check_token();
         try {
             if (!whmcs_dns_rate_ok($clientId)) {
-                throw new WhmcsDnsUserException('Muitas operacoes em pouco tempo. Aguarde um minuto.');
+                throw new WhmcsDnsUserException('Muitas operações em pouco tempo. Aguarde um minuto.');
             }
             if ((string) $domain->status !== 'Active') {
-                throw new WhmcsDnsUserException('Este dominio nao esta ativo.');
+                throw new WhmcsDnsUserException('Este domínio não está ativo.');
             }
 
             if ($requestedAction === 'apply_default') {
@@ -868,16 +868,16 @@ function whmcs_dns_nameservers_view(array $vars, int $clientId): array
                 $targetMode = 'default';
                 $label = 'DNS Padrao';
                 if (count($targetNs) < 2) {
-                    throw new WhmcsDnsUserException('DNS padrao nao configurado no WHMCS.');
+                    throw new WhmcsDnsUserException('DNS padrão não configurado no WHMCS.');
                 }
             } else {
                 $preset = (string) ($_POST['preset'] ?? '');
                 $map = whmcs_dns_ns_map();
                 if (!in_array($preset, ['cpanel', 'directadmin'], true) || !isset($map[$preset])) {
-                    throw new WhmcsDnsUserException('Servico invalido.');
+                    throw new WhmcsDnsUserException('Serviço inválido.');
                 }
                 if (empty($services[$preset])) {
-                    throw new WhmcsDnsUserException('Voce nao tem um plano ativo desse tipo para este dominio.');
+                    throw new WhmcsDnsUserException('Você não tem um plano ativo desse tipo para este domínio.');
                 }
                 $targetNs = $map[$preset];
                 $targetMode = $preset;
@@ -1102,7 +1102,7 @@ function whmcs_dns_clientarea($vars)
         $domainName = trim((string)($_POST['domain_name'] ?? ''));
         if (!whmcs_dns_rate_ok($clientId)) {
             logActivity("WHMCS-DNS: throttle cliente={$clientId} acao={$action}");
-            $message = ['type' => 'error', 'text' => 'Muitas operacoes em pouco tempo. Aguarde um minuto.'];
+            $message = ['type' => 'error', 'text' => 'Muitas operações em pouco tempo. Aguarde um minuto.'];
         } elseif ($domainName === '') {
             $message = ['type' => 'error', 'text' => 'Domain is required.'];
         } else {
