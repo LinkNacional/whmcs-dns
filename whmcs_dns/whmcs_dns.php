@@ -18,6 +18,7 @@ use Namingo\Cardo\DNS\Service as CardoService;
 define('WHMCSDNS_TABLE_ZONES', 'zones');
 define('WHMCSDNS_TABLE_RECORDS', 'records');
 define('WHMCSDNS_TABLE_THROTTLE', 'mod_whmcs_dns_throttle');
+define('WHMCSDNS_TABLE_DOMAIN_STATE', 'mod_whmcs_dns_domain_state');
 
 /**
  * Excecao de negocio: a mensagem e segura para o cliente final.
@@ -235,6 +236,23 @@ function whmcs_dns_activate()
                 $table->bigInteger('client_id')->unsigned()->primary();
                 $table->integer('window_start');
                 $table->integer('hits')->default(0);
+            });
+        }
+
+        if (!Capsule::schema()->hasTable(WHMCSDNS_TABLE_DOMAIN_STATE)) {
+            Capsule::schema()->create(WHMCSDNS_TABLE_DOMAIN_STATE, function ($table) {
+                /** @var \Illuminate\Database\Schema\Blueprint $table */
+                $table->bigIncrements('id');
+                $table->bigInteger('domain_id')->unsigned()->unique();
+                $table->bigInteger('client_id')->unsigned()->index();
+                $table->string('mode', 20)->default('default');
+                $table->string('status', 20)->default('pending');
+                $table->bigInteger('service_id')->unsigned()->nullable();
+                $table->bigInteger('zone_id')->unsigned()->nullable();
+                $table->text('default_ns')->nullable();
+                $table->text('last_error')->nullable();
+                $table->dateTime('created_at')->useCurrent();
+                $table->dateTime('updated_at')->useCurrent()->useCurrentOnUpdate();
             });
         }
 
@@ -544,6 +562,243 @@ function whmcs_dns_rate_ok(int $clientId, int $limit = 30, int $windowSeconds = 
 }
 
 /**
+ * Garante a tabela de estado por dominio (instalacoes antigas nao rodam activate).
+ */
+function whmcs_dns_ensure_domain_state_table(): void
+{
+    static $done = false;
+    if ($done) {
+        return;
+    }
+    if (!Capsule::schema()->hasTable(WHMCSDNS_TABLE_DOMAIN_STATE)) {
+        try {
+            Capsule::schema()->create(WHMCSDNS_TABLE_DOMAIN_STATE, function ($table) {
+                /** @var \Illuminate\Database\Schema\Blueprint $table */
+                $table->bigIncrements('id');
+                $table->bigInteger('domain_id')->unsigned()->unique();
+                $table->bigInteger('client_id')->unsigned()->index();
+                $table->string('mode', 20)->default('default');
+                $table->string('status', 20)->default('pending');
+                $table->bigInteger('service_id')->unsigned()->nullable();
+                $table->bigInteger('zone_id')->unsigned()->nullable();
+                $table->text('default_ns')->nullable();
+                $table->text('last_error')->nullable();
+                $table->dateTime('created_at')->useCurrent();
+                $table->dateTime('updated_at')->useCurrent()->useCurrentOnUpdate();
+            });
+        } catch (Throwable $e) {
+            if (!Capsule::schema()->hasTable(WHMCSDNS_TABLE_DOMAIN_STATE)) {
+                throw $e;
+            }
+        }
+    }
+    $done = true;
+}
+
+/**
+ * Nameservers padrao definidos no WHMCS (Setup > General > Domains).
+ */
+function whmcs_dns_default_ns(): array
+{
+    $ns = [];
+    for ($i = 1; $i <= 5; $i++) {
+        $v = strtolower(rtrim(trim((string) Capsule::table('tblconfiguration')
+            ->where('setting', 'DefaultNameserver' . $i)
+            ->value('value')), '.'));
+        if ($v !== '') {
+            $ns[] = $v;
+        }
+    }
+    return $ns;
+}
+
+/**
+ * Pares fixos por modo. DirectAdmin usa o mesmo par do DNS Padrao (ns7/ns8).
+ */
+function whmcs_dns_ns_map(): array
+{
+    return [
+        'dnspro' => ['dns1.linknacional.com', 'dns2.linknacional.com'],
+        'directadmin' => ['ns7.linknacional.com.br', 'ns8.linknacional.com.br'],
+        'cpanel' => ['ns1.linknacional.com.br', 'ns2.linknacional.com.br'],
+    ];
+}
+
+function whmcs_dns_normalize_ns(array $ns): array
+{
+    $out = [];
+    foreach ($ns as $v) {
+        $v = strtolower(rtrim(trim((string) $v), '.'));
+        if ($v !== '') {
+            $out[] = $v;
+        }
+    }
+    $out = array_values(array_unique($out));
+    sort($out);
+    return $out;
+}
+
+/**
+ * Le os nameservers atuais via API do WHMCS (modulo do registrar).
+ * Retorna ok=false com o motivo quando o registrar nao esta configurado.
+ */
+function whmcs_dns_get_domain_ns(int $domainId): array
+{
+    try {
+        $r = localAPI('DomainGetNameservers', ['domainid' => $domainId]);
+    } catch (Throwable $e) {
+        return ['ok' => false, 'ns' => [], 'error' => $e->getMessage()];
+    }
+
+    if (($r['result'] ?? '') !== 'success') {
+        return [
+            'ok' => false,
+            'ns' => [],
+            'error' => (string) ($r['error'] ?? $r['message'] ?? 'registrar nao configurado'),
+        ];
+    }
+
+    $ns = [];
+    for ($i = 1; $i <= 5; $i++) {
+        $v = (string) ($r['ns' . $i] ?? '');
+        if (trim($v) !== '') {
+            $ns[] = $v;
+        }
+    }
+
+    return ['ok' => true, 'ns' => whmcs_dns_normalize_ns($ns), 'error' => ''];
+}
+
+/**
+ * Servicos ativos do cliente para o dominio (cPanel/DirectAdmin).
+ */
+function whmcs_dns_domain_services(int $clientId, string $domain): array
+{
+    $rows = Capsule::table('tblhosting as h')
+        ->leftJoin('tblproducts as p', 'p.id', '=', 'h.packageid')
+        ->leftJoin('tblservers as s', 's.id', '=', 'h.server')
+        ->where('h.userid', $clientId)
+        ->where('h.domain', $domain)
+        ->where('h.domainstatus', 'Active')
+        ->select('h.id', 'p.name as product', 's.type as servertype')
+        ->get();
+
+    $out = [];
+    foreach ($rows as $r) {
+        $type = (string) ($r->servertype ?? '');
+        if ($type === 'cpanel') {
+            $out['cpanel'] = ['id' => (int) $r->id, 'product' => (string) $r->product];
+        } elseif ($type === 'directadmin' || $type === 'directadminExtended') {
+            $out['directadmin'] = ['id' => (int) $r->id, 'product' => (string) $r->product];
+        }
+    }
+
+    return $out;
+}
+
+/**
+ * Modo atual: estado gravado tem prioridade; NS e evidencia, nao fonte.
+ * DirectAdmin e DNS Padrao compartilham ns7/ns8 - so o estado distingue.
+ */
+function whmcs_dns_resolve_mode($state, $zone, array $ns, array $defaultNs): string
+{
+    if ($state
+        && (string) $state->status === 'active'
+        && in_array((string) $state->mode, ['default', 'custom', 'dnspro', 'directadmin', 'cpanel'], true)
+    ) {
+        return (string) $state->mode;
+    }
+
+    $ns = whmcs_dns_normalize_ns($ns);
+    if ($ns === []) {
+        return 'unknown';
+    }
+
+    $map = whmcs_dns_ns_map();
+    if ($zone && $ns === whmcs_dns_normalize_ns($map['dnspro'])) {
+        return 'dnspro';
+    }
+    if ($ns === whmcs_dns_normalize_ns($map['cpanel'])) {
+        return 'cpanel';
+    }
+    if ($ns === whmcs_dns_normalize_ns($defaultNs)) {
+        return 'default';
+    }
+
+    return 'custom';
+}
+
+/**
+ * Pagina "DNS (Nomes Servidores)" - cards de servico do dominio.
+ * Fase 1: somente leitura; nenhuma acao de escrita.
+ */
+function whmcs_dns_nameservers_view(array $vars, int $clientId): array
+{
+    whmcs_dns_ensure_domain_state_table();
+
+    $requested = trim((string) ($_REQUEST['domain'] ?? ''));
+    $domain = null;
+    if ($requested !== '') {
+        $domain = Capsule::table('tbldomains')
+            ->select('id', 'domain', 'status', 'registrar')
+            ->where('userid', $clientId)
+            ->where('domain', $requested)
+            ->first();
+    }
+    if (!$domain) {
+        $domain = Capsule::table('tbldomains')
+            ->select('id', 'domain', 'status', 'registrar')
+            ->where('userid', $clientId)
+            ->where('status', 'Active')
+            ->orderBy('domain', 'asc')
+            ->first();
+    }
+
+    if (!$domain) {
+        return [
+            'pagetitle' => 'DNS',
+            'templatefile' => 'nameservers',
+            'requirelogin' => true,
+            'vars' => ['error' => 'Nenhum dominio encontrado na sua conta.'],
+        ];
+    }
+
+    $domainId = (int) $domain->id;
+    $nsInfo = whmcs_dns_get_domain_ns($domainId);
+    $defaultNs = whmcs_dns_default_ns();
+    $zone = Capsule::table(WHMCSDNS_TABLE_ZONES)
+        ->where('domain_name', (string) $domain->domain)
+        ->where('client_id', $clientId)
+        ->first();
+    $state = Capsule::table(WHMCSDNS_TABLE_DOMAIN_STATE)->where('domain_id', $domainId)->first();
+    $services = whmcs_dns_domain_services($clientId, (string) $domain->domain);
+    $mode = whmcs_dns_resolve_mode($state, $zone, $nsInfo['ns'], $defaultNs);
+
+    return [
+        'pagetitle' => 'DNS - ' . $domain->domain,
+        'templatefile' => 'nameservers',
+        'requirelogin' => true,
+        'vars' => [
+            'domain' => (string) $domain->domain,
+            'domainId' => $domainId,
+            'domainStatus' => (string) $domain->status,
+            'registrar' => (string) $domain->registrar,
+            'ns' => $nsInfo['ns'],
+            'nsOk' => $nsInfo['ok'],
+            'nsError' => $nsInfo['error'],
+            'defaultNs' => $defaultNs,
+            'nsMap' => whmcs_dns_ns_map(),
+            'mode' => $mode,
+            'zone' => $zone,
+            'services' => $services,
+            'nativeNsUrl' => 'clientarea.php?action=domaindetails&id=' . $domainId . '#tabNameservers',
+            'dnsManagerUrl' => 'index.php?m=whmcs_dns&domain=' . urlencode((string) $domain->domain),
+            'dnsProState' => $zone ? ($mode === 'dnspro' ? 'active' : 'idle') : 'none',
+        ],
+    ];
+}
+
+/**
  * Client area page
  */
 function whmcs_dns_clientarea($vars)
@@ -560,6 +815,10 @@ function whmcs_dns_clientarea($vars)
     }
 
     $clientId = (int) $_SESSION['uid'];
+
+    if ((string) ($_REQUEST['view'] ?? '') === 'nameservers') {
+        return whmcs_dns_nameservers_view($vars, $clientId);
+    }
 
     $provider = $vars['provider'] ?? '';
     $apikey   = $vars['apikey'] ?? '';

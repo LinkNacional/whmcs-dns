@@ -96,3 +96,47 @@ add_hook('ClientAreaSecondarySidebar', 1, function ($sidebar) {
         // no-op
     }
 });
+
+/**
+ * Substitui o item nativo "Nome de servidores de DNS (Nameservers)" pela
+ * nossa tela de servicos (cards) na pagina de detalhes do dominio.
+ */
+add_hook('ClientAreaPrimarySidebar', 1, function ($sidebar) {
+    if (empty($_SESSION['uid'])) {
+        return;
+    }
+    if ((string) ($_GET['action'] ?? '') !== 'domaindetails') {
+        return;
+    }
+
+    $domainId = (int) ($_GET['id'] ?? $_GET['domainid'] ?? 0);
+    if ($domainId <= 0) {
+        return;
+    }
+
+    $clientId = (int) $_SESSION['uid'];
+    $domain = Capsule::table('tbldomains')
+        ->select('domain')
+        ->where('id', $domainId)
+        ->where('userid', $clientId)
+        ->first();
+
+    if (!$domain || empty($domain->domain)) {
+        return;
+    }
+
+    $panel = $sidebar->getChild('Domain Details Management');
+    if (!$panel) {
+        return;
+    }
+
+    $panel->removeChild('Modify Nameservers');
+
+    if (!$panel->getChild('LknDnsNameservers')) {
+        $panel->addChild('LknDnsNameservers', [
+            'label' => 'DNS (Nomes Servidores)',
+            'uri' => 'index.php?m=whmcs_dns&view=nameservers&domain=' . urlencode((string) $domain->domain),
+            'order' => 3,
+        ]);
+    }
+});
