@@ -767,7 +767,8 @@ function whmcs_dns_nameservers_view(array $vars, int $clientId): array
             'pagetitle' => 'DNS',
             'templatefile' => 'nameservers',
             'requirelogin' => true,
-            'vars' => ['error' => 'Nenhum dominio encontrado na sua conta.'],
+            'breadcrumb' => ['clientarea.php?action=domains' => 'Meus Domínios'],
+            'vars' => ['error' => 'Nenhum domínio encontrado na sua conta.'],
         ];
     }
 
@@ -809,6 +810,11 @@ function whmcs_dns_nameservers_view(array $vars, int $clientId): array
         'pagetitle' => 'DNS - ' . $domain->domain,
         'templatefile' => 'nameservers',
         'requirelogin' => true,
+        'breadcrumb' => [
+            'clientarea.php?action=domains' => 'Meus Domínios',
+            'clientarea.php?action=domaindetails&id=' . $domainId => (string) $domain->domain,
+            'index.php?m=whmcs_dns&view=nameservers&domain=' . urlencode((string) $domain->domain) => 'DNS',
+        ],
         'vars' => [
             'domain' => (string) $domain->domain,
             'domainId' => $domainId,

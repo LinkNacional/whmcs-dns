@@ -43,7 +43,7 @@
 
 <div class="row g-3">
     <div class="col-md-6">
-        <div class="card h-100">
+        <div class="card h-100 mb-3">
             <div class="card-body d-flex flex-column">
                 <div class="d-flex align-items-start mb-2">
                     <div class="me-3" style="font-size:1.4rem;color:#3b5bfd;"><i class="fas fa-globe"></i></div>
@@ -67,7 +67,7 @@
     </div>
 
     <div class="col-md-6">
-        <div class="card h-100">
+        <div class="card h-100 mb-3">
             <div class="card-body d-flex flex-column">
                 <div class="d-flex align-items-start mb-2">
                     <div class="me-3" style="font-size:1.4rem;color:#6f42c1;"><i class="fas fa-cloud"></i></div>
@@ -90,7 +90,7 @@
     </div>
 
     <div class="col-md-6">
-        <div class="card h-100">
+        <div class="card h-100 mb-3">
             <div class="card-body d-flex flex-column">
                 <div class="d-flex align-items-start mb-2">
                     <div class="me-3" style="font-size:1.4rem;color:#0f766e;"><i class="fas fa-shield-alt"></i></div>
@@ -116,7 +116,7 @@
 
     {if $services.cpanel || $mode == 'cpanel'}
     <div class="col-md-6">
-        <div class="card h-100">
+        <div class="card h-100 mb-3">
             <div class="card-body d-flex flex-column">
                 <div class="d-flex align-items-start mb-2">
                     <div class="me-3" style="font-size:1.4rem;color:#fd7e14;"><i class="fas fa-server"></i></div>
@@ -141,7 +141,7 @@
 
     {if $services.directadmin || $mode == 'directadmin'}
     <div class="col-md-6">
-        <div class="card h-100">
+        <div class="card h-100 mb-3">
             <div class="card-body d-flex flex-column">
                 <div class="d-flex align-items-start mb-2">
                     <div class="me-3" style="font-size:1.4rem;color:#0d6efd;"><i class="fas fa-cogs"></i></div>
@@ -165,5 +165,4 @@
     {/if}
 </div>
 
-<p class="small text-muted mt-4">Alterações de nameservers podem levar até 24 horas para propagar. Para editar registros do DNS Pro, use <a href="{$dnsManagerUrl|escape}">DNS Manager</a>.</p>
 {/if}
