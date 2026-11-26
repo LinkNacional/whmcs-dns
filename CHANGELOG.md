@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.0 — em teste (homolog)
+
+### DNS Pro (produto)
+- Modulo de servidor `dnspro` (Create/Suspend/Unsuspend/Terminate) integrado ao addon.
+- `whmcs_dns/lib/service.php`: provisiona/apaga zona via Cardo e aplica os nameservers do DNS Pro quando o registrar permite.
+- Card DNS Pro no dominio: ATIVO / Disponivel + Ativar / Contratar (link de carrinho com ciclo derivado do produto) / Em breve.
+- Novo setting do addon: `cart_pid_dnspro`.
+
 ## 1.2.0 — 2026-11-26
 
 ### Segurança e limites
